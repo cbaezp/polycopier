@@ -339,23 +339,26 @@ fn render_live_feed(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
     f.render_widget(list, area);
 }
 
-// -- Our Positions (entry quality analysis) ------------------------------------
+// -- Our Positions (open + copied, with entry quality analysis) ----------------
 //
-// For each position we hold, this table shows:
-//   Our Entry  - what we paid (average_entry_price)
-//   Tgt Entry  - what the target paid (avg_price from target_positions)
-//   Delta%     - how much more (or less) we paid vs the target
-//   Cur Price  - current market price (from target_positions)
-//   Our PnL%   - estimated (cur_price - our_entry) / our_entry
+// Only positions that are open in BOTH our wallet AND a target wallet are shown.
+// Positions we hold that the target has already closed are omitted.
 //
-// Color coding:
-//   Green  - delta within +5% of target entry (good entry quality)
-//   Yellow - delta +5% to +15% (entered after some move, still ok)
-//   Red    - delta >+15% or target no longer holds this token (chased)
+// Columns:
+//   SOURCE       - shortened target wallet the position was copied from
+//   TOKEN        - first 12 chars of token_id
+//   SZ           - our share size
+//   OUR ENTRY    - our average_entry_price
+//   TGT ENTRY    - target's avg_price at their entry
+//   DELTA%       - (our_entry - tgt_entry) / tgt_entry
+//   CUR PRICE    - live market price (from target_positions)
+//   OUR PNL%     - (cur_price - our_entry) / our_entry
+//
+// Row color: green (<= +5%), yellow (+5-15%), red (>+15% -- chased)
 fn render_our_positions(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
     use std::collections::HashMap;
 
-    // Build a lookup from token_id -> TargetPosition for the join
+    // token_id -> TargetPosition for cross-reference
     let target_map: HashMap<&str, &crate::models::TargetPosition> = snap
         .target_positions
         .iter()
@@ -363,6 +366,11 @@ fn render_our_positions(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect)
         .collect();
 
     let header = Row::new(vec![
+        Cell::from("SOURCE").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Cell::from("TOKEN").style(
             Style::default()
                 .fg(Color::Cyan)
@@ -403,80 +411,68 @@ fn render_our_positions(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect)
     .style(Style::default().add_modifier(Modifier::UNDERLINED));
 
     let hundred = Decimal::from(100);
+    let five = Decimal::from(5);
+    let fifteen = Decimal::from(15);
 
+    // Only show positions that are currently open in a target wallet too
     let rows: Vec<Row> = snap
         .positions
         .iter()
-        .map(|p| {
+        .filter_map(|p| target_map.get(p.token_id.as_str()).map(|tp| (p, *tp)))
+        .map(|(p, tp)| {
             let token_short = &p.token_id[..p.token_id.len().min(12)];
+            let wallet_short = shorten(&tp.source_wallet);
 
-            match target_map.get(p.token_id.as_str()) {
-                Some(tp) => {
-                    // Compute entry delta: how much more we paid vs the target
-                    let delta_pct = if tp.avg_price > Decimal::ZERO {
-                        (p.average_entry_price - tp.avg_price) / tp.avg_price * hundred
-                    } else {
-                        Decimal::ZERO
-                    };
+            let delta_pct = if tp.avg_price > Decimal::ZERO {
+                (p.average_entry_price - tp.avg_price) / tp.avg_price * hundred
+            } else {
+                Decimal::ZERO
+            };
 
-                    // Our estimated PnL based on current market price
-                    let our_pnl_pct = if p.average_entry_price > Decimal::ZERO {
-                        (tp.cur_price - p.average_entry_price) / p.average_entry_price * hundred
-                    } else {
-                        Decimal::ZERO
-                    };
+            let our_pnl_pct = if p.average_entry_price > Decimal::ZERO {
+                (tp.cur_price - p.average_entry_price) / p.average_entry_price * hundred
+            } else {
+                Decimal::ZERO
+            };
 
-                    // Color by entry quality
-                    let five = Decimal::from(5);
-                    let fifteen = Decimal::from(15);
-                    let row_color = if delta_pct <= five {
-                        Color::Green // paid close to or better than target
-                    } else if delta_pct <= fifteen {
-                        Color::Yellow // modest premium, still reasonable
-                    } else {
-                        Color::Red // paid significantly more than target (chased)
-                    };
+            let delta_color = if delta_pct <= five {
+                Color::Green
+            } else if delta_pct <= fifteen {
+                Color::Yellow
+            } else {
+                Color::Red
+            };
 
-                    let pnl_color = if our_pnl_pct >= Decimal::ZERO {
-                        Color::Green
-                    } else {
-                        Color::Red
-                    };
+            let pnl_color = if our_pnl_pct >= Decimal::ZERO {
+                Color::Green
+            } else {
+                Color::Red
+            };
 
-                    Row::new(vec![
-                        Cell::from(token_short.to_string()),
-                        Cell::from(format!("{:.2}", p.size)),
-                        Cell::from(format!("${:.3}", p.average_entry_price)),
-                        Cell::from(format!("${:.3}", tp.avg_price)),
-                        Cell::from(format!("{:+.1}%", delta_pct))
-                            .style(Style::default().fg(row_color)),
-                        Cell::from(format!("${:.3}", tp.cur_price)),
-                        Cell::from(format!("{:+.1}%", our_pnl_pct))
-                            .style(Style::default().fg(pnl_color)),
-                    ])
-                    .style(Style::default().fg(Color::White))
-                }
-                None => {
-                    // Target no longer holds this position (closed it, or scanner
-                    // hasn't fetched it yet). Show our data only, flag in red.
-                    Row::new(vec![
-                        Cell::from(token_short.to_string()),
-                        Cell::from(format!("{:.2}", p.size)),
-                        Cell::from(format!("${:.3}", p.average_entry_price)),
-                        Cell::from("--"),
-                        Cell::from("--"),
-                        Cell::from("--"),
-                        Cell::from("--"),
-                    ])
-                    .style(Style::default().fg(Color::DarkGray))
-                }
-            }
+            Row::new(vec![
+                Cell::from(wallet_short).style(Style::default().fg(Color::Yellow)),
+                Cell::from(token_short.to_string()),
+                Cell::from(format!("{:.2}", p.size)),
+                Cell::from(format!("${:.3}", p.average_entry_price)),
+                Cell::from(format!("${:.3}", tp.avg_price)),
+                Cell::from(format!("{:+.1}%", delta_pct)).style(
+                    Style::default()
+                        .fg(delta_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Cell::from(format!("${:.3}", tp.cur_price)),
+                Cell::from(format!("{:+.1}%", our_pnl_pct)).style(Style::default().fg(pnl_color)),
+            ])
+            .style(Style::default().fg(Color::White))
         })
         .collect();
+
+    let copied_count = rows.len();
 
     let table = Table::new(
         rows,
         &[
+            Constraint::Length(13),  // source wallet
             Constraint::Min(13),     // token
             Constraint::Length(6),   // size
             Constraint::Length(10),  // our entry
@@ -491,8 +487,8 @@ fn render_our_positions(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect)
         Block::default()
             .title(Span::styled(
                 format!(
-                    " [P] Our Positions ({})  -- green: good entry   yellow: mild premium   red: chased ",
-                    snap.positions.len()
+                    " [P] Copied & Open ({})  -- green: good entry (<5%)   yellow: mild premium (5-15%)   red: chased (>15%) ",
+                    copied_count
                 ),
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
             ))

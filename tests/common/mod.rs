@@ -84,6 +84,7 @@ pub fn target_pos(token_id: &str) -> TargetPosition {
         percent_pnl: dec!(0.10),
         size: dec!(20),
         status: ScanStatus::Monitoring,
+        source_wallet: "0xtest..wall".to_string(),
     }
 }
 

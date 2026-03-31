@@ -134,4 +134,6 @@ pub struct TargetPosition {
     pub percent_pnl: Decimal,
     pub size: Decimal,
     pub status: ScanStatus,
+    /// The target wallet address this position was fetched from.
+    pub source_wallet: String,
 }

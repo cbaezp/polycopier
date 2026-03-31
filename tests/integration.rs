@@ -731,6 +731,7 @@ mod strategy_engine_tests {
             percent_pnl: dec!(0.10),
             size: dec!(10),
             status: ScanStatus::Monitoring,
+            source_wallet: "0xtest..wall".to_string(),
         }
     }
 
@@ -1132,6 +1133,7 @@ mod scan_interval_tests {
             percent_pnl: pnl,
             size: dec!(10),
             status: ScanStatus::Monitoring,
+            source_wallet: "0xtest..wall".to_string(),
         }
     }
 

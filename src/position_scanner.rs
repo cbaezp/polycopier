@@ -250,6 +250,7 @@ async fn scan_positions(
                 percent_pnl: pos.percent_pnl,
                 size: pos.size,
                 status,
+                source_wallet: wallet_str.to_string(),
             });
         }
     }
