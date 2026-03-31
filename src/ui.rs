@@ -78,20 +78,14 @@ pub async fn start_tui(state: Arc<RwLock<BotState>>, config: Config) -> Result<(
                 } else {
                     None
                 },
-                // Cross-reference: our positions whose token_id also appears
-                // in the target's current position list. Accurate after every
-                // scan cycle — regardless of restarts or session history.
-                copied_count: {
-                    let target_token_ids: std::collections::HashSet<&str> = g
-                        .target_positions
-                        .iter()
-                        .map(|p| p.token_id.as_str())
-                        .collect();
-                    g.positions
-                        .keys()
-                        .filter(|id| target_token_ids.contains(id.as_str()))
-                        .count()
-                },
+                // Count positions the target holds that we ALSO hold.
+                // The scanner already classifies these as SkippedOwned (HELD)
+                // so this is just a tally of that bucket -- no extra work needed.
+                copied_count: g
+                    .target_positions
+                    .iter()
+                    .filter(|p| p.status == crate::models::ScanStatus::SkippedOwned)
+                    .count(),
                 skips: g.trades_skipped,
             }
         };
@@ -198,7 +192,7 @@ fn render_header(f: &mut Frame, snap: &Snap, config: &Config, area: ratatui::lay
                 format!("${:.2}", snap.unrealized_pnl),
                 Style::default().fg(pnl_color(snap.unrealized_pnl)),
             ),
-            Span::styled("   |   Open: ", label_style),
+            Span::styled("   |   Copied: ", label_style),
             Span::styled(
                 format!("{}", snap.copied_count),
                 Style::default()
