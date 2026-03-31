@@ -1,22 +1,27 @@
 use crate::config::Config;
-use anyhow::{Result, bail};
-use std::str::FromStr;
+use crate::models::{OrderRequest, TradeSide};
+use alloy::primitives::Address;
 use alloy::signers::local::LocalSigner;
 use alloy::signers::Signer;
-use polymarket_client_sdk::clob::{Client as ClobClient, Config as ClobConfig};
-use polymarket_client_sdk::clob::types::SignatureType;
-use polymarket_client_sdk::clob::types::request::BalanceAllowanceRequest;
-use polymarket_client_sdk::types::U256;
-use alloy::primitives::Address;
-use crate::models::{OrderRequest, TradeSide};
-use polymarket_client_sdk::clob::types::Side as SdkSide;
-use rust_decimal::Decimal;
-use std::sync::Arc;
+use anyhow::{bail, Result};
 use core::pin::Pin;
+use polymarket_client_sdk::clob::types::request::BalanceAllowanceRequest;
+use polymarket_client_sdk::clob::types::Side as SdkSide;
+use polymarket_client_sdk::clob::types::SignatureType;
+use polymarket_client_sdk::clob::{Client as ClobClient, Config as ClobConfig};
+use polymarket_client_sdk::types::U256;
+use rust_decimal::Decimal;
 use std::future::Future;
+use std::str::FromStr;
+use std::sync::Arc;
 
-pub type OrderSubmitter = Arc<dyn Fn(OrderRequest) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> + Send + Sync>;
-pub type BalanceFetcher = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Decimal>> + Send + 'static>> + Send + Sync>;
+pub type OrderSubmitter = Arc<
+    dyn Fn(OrderRequest) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>
+        + Send
+        + Sync,
+>;
+pub type BalanceFetcher =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Decimal>> + Send + 'static>> + Send + Sync>;
 
 pub async fn build_order_submitter(config: &Config) -> Result<(OrderSubmitter, BalanceFetcher)> {
     let signer = LocalSigner::from_str(&config.private_key)?.with_chain_id(Some(config.chain_id));
@@ -54,7 +59,10 @@ pub async fn build_order_submitter(config: &Config) -> Result<(OrderSubmitter, B
         Box::pin(async move {
             tracing::info!(
                 "Executing Limit Order: Side={:?}, Price={}, Size={}, Token={}",
-                order.side, order.price, order.size, order.token_id
+                order.side,
+                order.price,
+                order.size,
+                order.token_id
             );
 
             let side = match order.side {
@@ -76,10 +84,7 @@ pub async fn build_order_submitter(config: &Config) -> Result<(OrderSubmitter, B
 
             match clob.post_order(signed_order).await {
                 Ok(res) => {
-                    tracing::info!(
-                        "Order accepted by CLOB. Response: {:?}",
-                        res
-                    );
+                    tracing::info!("Order accepted by CLOB. Response: {:?}", res);
                     println!("      Order ID: {:?}", res);
                     Ok(())
                 }
@@ -93,5 +98,3 @@ pub async fn build_order_submitter(config: &Config) -> Result<(OrderSubmitter, B
 
     Ok((order_submitter, balance_fetcher))
 }
-
-

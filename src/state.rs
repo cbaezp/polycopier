@@ -1,6 +1,6 @@
-use std::collections::{HashMap, VecDeque};
+use crate::models::{EvaluatedTrade, Position, TargetPosition};
 use rust_decimal::Decimal;
-use crate::models::{Position, EvaluatedTrade, TargetPosition};
+use std::collections::{HashMap, VecDeque};
 
 pub struct BotState {
     pub positions: HashMap<String, Position>,

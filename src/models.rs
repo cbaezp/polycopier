@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use rust_decimal::Decimal;
 use ratatui::style::Color;
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeEvent {
@@ -56,28 +56,28 @@ pub enum ScanStatus {
 impl ScanStatus {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Monitoring   => "◉ WATCH",
-            Self::Entered      => "⏺ QUEUED",
+            Self::Monitoring => "◉ WATCH",
+            Self::Entered => "⏺ QUEUED",
             Self::SkippedOwned => "◆ HELD",
-            Self::SkippedLoss  => "✘ LOSS",
+            Self::SkippedLoss => "✘ LOSS",
             Self::SkippedPrice => "─ RANGE",
         }
     }
     pub fn color(&self) -> Color {
         match self {
-            Self::Monitoring   => Color::Green,
-            Self::Entered      => Color::Cyan,
+            Self::Monitoring => Color::Green,
+            Self::Entered => Color::Cyan,
             Self::SkippedOwned => Color::Magenta,
-            Self::SkippedLoss  => Color::Red,
+            Self::SkippedLoss => Color::Red,
             Self::SkippedPrice => Color::DarkGray,
         }
     }
     pub fn sort_key(&self) -> u8 {
         match self {
-            Self::Monitoring   => 0,
-            Self::Entered      => 1,
+            Self::Monitoring => 0,
+            Self::Entered => 1,
             Self::SkippedOwned => 2,
-            Self::SkippedLoss  => 3,
+            Self::SkippedLoss => 3,
             Self::SkippedPrice => 4,
         }
     }
@@ -94,4 +94,3 @@ pub struct TargetPosition {
     pub size: Decimal,
     pub status: ScanStatus,
 }
-

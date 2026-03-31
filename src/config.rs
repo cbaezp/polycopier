@@ -1,9 +1,9 @@
-use std::env;
+use inquire::{Password, Text};
 use rust_decimal::Decimal;
-use std::str::FromStr;
+use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
-use inquire::{Password, Text};
+use std::str::FromStr;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -48,7 +48,10 @@ impl Config {
             }
         };
 
-        let funder_address = match env::var("FUNDER_ADDRESS").ok().filter(|v| !is_placeholder(v)) {
+        let funder_address = match env::var("FUNDER_ADDRESS")
+            .ok()
+            .filter(|v| !is_placeholder(v))
+        {
             Some(v) => v,
             None => {
                 write_new_env = true;
@@ -72,7 +75,10 @@ impl Config {
             }
         };
 
-        let max_slippage_str = match env::var("MAX_SLIPPAGE_PCT").ok().filter(|v| !is_placeholder(v)) {
+        let max_slippage_str = match env::var("MAX_SLIPPAGE_PCT")
+            .ok()
+            .filter(|v| !is_placeholder(v))
+        {
             Some(v) => v,
             None => {
                 write_new_env = true;
@@ -83,7 +89,10 @@ impl Config {
             }
         };
 
-        let max_trade_size_str = match env::var("MAX_TRADE_SIZE_USD").ok().filter(|v| !is_placeholder(v)) {
+        let max_trade_size_str = match env::var("MAX_TRADE_SIZE_USD")
+            .ok()
+            .filter(|v| !is_placeholder(v))
+        {
             Some(v) => v,
             None => {
                 write_new_env = true;
@@ -94,7 +103,10 @@ impl Config {
             }
         };
 
-        let max_delay_str = match env::var("MAX_DELAY_SECONDS").ok().filter(|v| !is_placeholder(v)) {
+        let max_delay_str = match env::var("MAX_DELAY_SECONDS")
+            .ok()
+            .filter(|v| !is_placeholder(v))
+        {
             Some(v) => v,
             None => {
                 write_new_env = true;
@@ -105,7 +117,10 @@ impl Config {
             }
         };
 
-        let max_copy_loss_str = match env::var("MAX_COPY_LOSS_PCT").ok().filter(|v| !is_placeholder(v)) {
+        let max_copy_loss_str = match env::var("MAX_COPY_LOSS_PCT")
+            .ok()
+            .filter(|v| !is_placeholder(v))
+        {
             Some(v) => v,
             None => {
                 write_new_env = true;
@@ -123,7 +138,7 @@ impl Config {
                 .create(true)
                 .truncate(true)
                 .open(".env")?;
-                
+
             writeln!(file, "PRIVATE_KEY=\"{}\"", private_key)?;
             writeln!(file, "FUNDER_ADDRESS=\"{}\"", funder_address)?;
             writeln!(file, "TARGET_WALLETS=\"{}\"", target_wallets_str)?;
@@ -147,9 +162,7 @@ impl Config {
             .parse::<Decimal>()
             .unwrap_or_else(|_| Decimal::from_str("10.00").unwrap());
 
-        let max_delay_seconds = max_delay_str
-            .parse::<i64>()
-            .unwrap_or(2);
+        let max_delay_seconds = max_delay_str.parse::<i64>().unwrap_or(2);
 
         let max_copy_loss_pct = max_copy_loss_str
             .parse::<Decimal>()
@@ -167,4 +180,3 @@ impl Config {
         })
     }
 }
-

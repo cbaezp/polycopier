@@ -4,7 +4,9 @@
 //! pure functions extracted from each module, plus async strategy-engine
 //! tests using a mock OrderSubmitter.
 
-use polycopier::models::{EvaluatedTrade, OrderRequest, Position, ScanStatus, TradeEvent, TradeSide};
+use polycopier::models::{
+    EvaluatedTrade, OrderRequest, Position, ScanStatus, TradeEvent, TradeSide,
+};
 use polycopier::position_scanner::classify_position;
 use polycopier::risk::RiskEngine;
 use polycopier::state::BotState;
@@ -110,12 +112,16 @@ mod config_tests {
 
     #[test]
     fn real_address_not_placeholder() {
-        assert!(!is_placeholder("0x5239883317CF1dd037a61D6A3b3F6A7Dd85c8dC9"));
+        assert!(!is_placeholder(
+            "0x5239883317CF1dd037a61D6A3b3F6A7Dd85c8dC9"
+        ));
     }
 
     #[test]
     fn wallet_address_not_placeholder() {
-        assert!(!is_placeholder("0xfcbecc7e5186e88e03445b81f593685d62828f44"));
+        assert!(!is_placeholder(
+            "0xfcbecc7e5186e88e03445b81f593685d62828f44"
+        ));
     }
 }
 
@@ -249,7 +255,11 @@ mod state_tests {
         let mut state = BotState::new();
         state.positions.insert(
             "tok1".to_string(),
-            Position { token_id: "tok1".to_string(), size: dec!(20), average_entry_price: dec!(0.50) },
+            Position {
+                token_id: "tok1".to_string(),
+                size: dec!(20),
+                average_entry_price: dec!(0.50),
+            },
         );
         let pos = state.positions.get("tok1").expect("position should exist");
         assert_eq!(pos.size, dec!(20));
@@ -261,7 +271,11 @@ mod state_tests {
         let mut state = BotState::new();
         state.positions.insert(
             "tok2".to_string(),
-            Position { token_id: "tok2".to_string(), size: dec!(10), average_entry_price: dec!(0.60) },
+            Position {
+                token_id: "tok2".to_string(),
+                size: dec!(10),
+                average_entry_price: dec!(0.60),
+            },
         );
         state.positions.get_mut("tok2").unwrap().size = dec!(8);
         assert_eq!(state.positions.get("tok2").unwrap().size, dec!(8));
@@ -278,11 +292,19 @@ mod state_tests {
         let mut state = BotState::new();
         state.positions.insert(
             "tokA".to_string(),
-            Position { token_id: "tokA".to_string(), size: dec!(5), average_entry_price: dec!(0.20) },
+            Position {
+                token_id: "tokA".to_string(),
+                size: dec!(5),
+                average_entry_price: dec!(0.20),
+            },
         );
         state.positions.insert(
             "tokB".to_string(),
-            Position { token_id: "tokB".to_string(), size: dec!(50), average_entry_price: dec!(0.75) },
+            Position {
+                token_id: "tokB".to_string(),
+                size: dec!(50),
+                average_entry_price: dec!(0.75),
+            },
         );
         assert_eq!(state.positions.get("tokA").unwrap().size, dec!(5));
         assert_eq!(state.positions.get("tokB").unwrap().size, dec!(50));
@@ -302,7 +324,9 @@ mod risk_tests {
     #[test]
     fn valid_trade_passes() {
         let mut e = engine();
-        assert!(e.check_trade(&make_trade("0xabc", dec!(0.50), dec!(10), TradeSide::BUY)).is_ok());
+        assert!(e
+            .check_trade(&make_trade("0xabc", dec!(0.50), dec!(10), TradeSide::BUY))
+            .is_ok());
     }
 
     #[test]
@@ -318,28 +342,36 @@ mod risk_tests {
     fn trade_exactly_at_1_usd_passes() {
         let mut e = engine();
         // 2 * $0.50 = $1.00
-        assert!(e.check_trade(&make_trade("0xabc", dec!(0.50), dec!(2), TradeSide::BUY)).is_ok());
+        assert!(e
+            .check_trade(&make_trade("0xabc", dec!(0.50), dec!(2), TradeSide::BUY))
+            .is_ok());
     }
 
     #[test]
     fn sell_trade_also_subject_to_min_check() {
         let mut e = engine();
         // $0.01 * 0.5 = $0.005
-        assert!(e.check_trade(&make_trade("0xabc", dec!(0.01), dec!(0.5), TradeSide::SELL)).is_err());
+        assert!(e
+            .check_trade(&make_trade("0xabc", dec!(0.01), dec!(0.5), TradeSide::SELL))
+            .is_err());
     }
 
     #[test]
     fn large_buy_passes_risk_check() {
         let mut e = engine();
         // Size-capping occurs in strategy.rs, not risk.rs
-        assert!(e.check_trade(&make_trade("0xabc", dec!(0.80), dec!(1000), TradeSide::BUY)).is_ok());
+        assert!(e
+            .check_trade(&make_trade("0xabc", dec!(0.80), dec!(1000), TradeSide::BUY))
+            .is_ok());
     }
 
     #[test]
     fn trade_just_above_1_usd_passes() {
         let mut e = engine();
         // 3 shares * $0.34 = $1.02 — just above the $1 threshold
-        assert!(e.check_trade(&make_trade("0xabc", dec!(0.34), dec!(3), TradeSide::BUY)).is_ok());
+        assert!(e
+            .check_trade(&make_trade("0xabc", dec!(0.34), dec!(3), TradeSide::BUY))
+            .is_ok());
     }
 
     #[test]
@@ -381,25 +413,37 @@ mod strategy_tests {
     #[test]
     fn zero_slippage_leaves_price_unchanged_sell() {
         let price = dec!(0.73);
-        assert_eq!(calculate_limit_price(price, TradeSide::SELL, dec!(0)), price);
+        assert_eq!(
+            calculate_limit_price(price, TradeSide::SELL, dec!(0)),
+            price
+        );
     }
 
     #[test]
     fn entry_size_within_budget_is_unchanged() {
         // 10 * $0.40 = $4 — under $10
-        assert_eq!(calculate_entry_size(dec!(10), dec!(0.40), dec!(10)), dec!(10));
+        assert_eq!(
+            calculate_entry_size(dec!(10), dec!(0.40), dec!(10)),
+            dec!(10)
+        );
     }
 
     #[test]
     fn entry_size_over_budget_is_capped() {
         // 100 * $0.40 = $40 — over $10 => 10/0.40 = 25
-        assert_eq!(calculate_entry_size(dec!(100), dec!(0.40), dec!(10)), dec!(25));
+        assert_eq!(
+            calculate_entry_size(dec!(100), dec!(0.40), dec!(10)),
+            dec!(25)
+        );
     }
 
     #[test]
     fn entry_size_at_exact_budget_passes_unchanged() {
         // 20 * $0.50 = $10 exactly
-        assert_eq!(calculate_entry_size(dec!(20), dec!(0.50), dec!(10)), dec!(20));
+        assert_eq!(
+            calculate_entry_size(dec!(20), dec!(0.50), dec!(10)),
+            dec!(20)
+        );
     }
 
     #[test]
@@ -426,9 +470,9 @@ mod strategy_tests {
         // Demonstrates WHY $1.05/$1.10 target is needed:
         // $1.00 / $0.52 = 1.923 → rounds to 1.92 → 1.92 * $0.52 = $0.9984 < $1
         // This is the bug we fixed — now we target $1.10 in the smoke test.
-        let raw = dec!(1.00) / dec!(0.52);          // = 1.923...
-        let rounded = (raw * dec!(1)).round_dp(2);  // = 1.92
-        let total = rounded * dec!(0.52);           // = 0.9984
+        let raw = dec!(1.00) / dec!(0.52); // = 1.923...
+        let rounded = (raw * dec!(1)).round_dp(2); // = 1.92
+        let total = rounded * dec!(0.52); // = 0.9984
         assert!(total < dec!(1.00), "demonstrates the rounding-below-$1 bug");
     }
 
@@ -447,7 +491,10 @@ mod strategy_tests {
         let held_sizes = [dec!(5), dec!(10), dec!(20.5), dec!(100)];
         for held in &held_sizes {
             let sell_size = (held * Decimal::new(97, 2)).round_dp(2);
-            assert!(sell_size < *held, "sell_size {sell_size} should be < held {held}");
+            assert!(
+                sell_size < *held,
+                "sell_size {sell_size} should be < held {held}"
+            );
         }
     }
 }
@@ -461,95 +508,183 @@ mod scanner_tests {
     const MAX: &str = "0.95";
     const LOSS: &str = "0.40";
 
-    fn min() -> Decimal { MIN.parse().unwrap() }
-    fn max() -> Decimal { MAX.parse().unwrap() }
-    fn loss() -> Decimal { LOSS.parse().unwrap() }
+    fn min() -> Decimal {
+        MIN.parse().unwrap()
+    }
+    fn max() -> Decimal {
+        MAX.parse().unwrap()
+    }
+    fn loss() -> Decimal {
+        LOSS.parse().unwrap()
+    }
 
-    fn classify(token: &str, price: Decimal, pnl: Decimal,
-                owned: &HashSet<String>, queued: &HashSet<String>) -> ScanStatus {
+    fn classify(
+        token: &str,
+        price: Decimal,
+        pnl: Decimal,
+        owned: &HashSet<String>,
+        queued: &HashSet<String>,
+    ) -> ScanStatus {
         classify_position(token, price, pnl, owned, queued, min(), max(), loss())
     }
 
     #[test]
     fn valid_position_is_monitoring() {
-        assert_eq!(classify("t1", dec!(0.50), dec!(-0.10), &empty_set(), &empty_set()), ScanStatus::Monitoring);
+        assert_eq!(
+            classify("t1", dec!(0.50), dec!(-0.10), &empty_set(), &empty_set()),
+            ScanStatus::Monitoring
+        );
     }
 
     #[test]
     fn already_owned_is_skipped_owned() {
-        assert_eq!(classify("t1", dec!(0.50), dec!(-0.10), &token_set(&["t1"]), &empty_set()), ScanStatus::SkippedOwned);
+        assert_eq!(
+            classify(
+                "t1",
+                dec!(0.50),
+                dec!(-0.10),
+                &token_set(&["t1"]),
+                &empty_set()
+            ),
+            ScanStatus::SkippedOwned
+        );
     }
 
     #[test]
     fn already_queued_is_entered() {
-        assert_eq!(classify("t1", dec!(0.50), dec!(-0.10), &empty_set(), &token_set(&["t1"])), ScanStatus::Entered);
+        assert_eq!(
+            classify(
+                "t1",
+                dec!(0.50),
+                dec!(-0.10),
+                &empty_set(),
+                &token_set(&["t1"])
+            ),
+            ScanStatus::Entered
+        );
     }
 
     #[test]
     fn price_below_min_is_range_skipped() {
-        assert_eq!(classify("t1", dec!(0.01), dec!(-0.10), &empty_set(), &empty_set()), ScanStatus::SkippedPrice);
+        assert_eq!(
+            classify("t1", dec!(0.01), dec!(-0.10), &empty_set(), &empty_set()),
+            ScanStatus::SkippedPrice
+        );
     }
 
     #[test]
     fn price_above_max_is_range_skipped() {
-        assert_eq!(classify("t1", dec!(0.97), dec!(0.05), &empty_set(), &empty_set()), ScanStatus::SkippedPrice);
+        assert_eq!(
+            classify("t1", dec!(0.97), dec!(0.05), &empty_set(), &empty_set()),
+            ScanStatus::SkippedPrice
+        );
     }
 
     #[test]
     fn price_at_min_boundary_is_monitoring() {
-        assert_eq!(classify("t1", dec!(0.02), dec!(-0.10), &empty_set(), &empty_set()), ScanStatus::Monitoring);
+        assert_eq!(
+            classify("t1", dec!(0.02), dec!(-0.10), &empty_set(), &empty_set()),
+            ScanStatus::Monitoring
+        );
     }
 
     #[test]
     fn price_at_max_boundary_is_monitoring() {
-        assert_eq!(classify("t1", dec!(0.95), dec!(-0.10), &empty_set(), &empty_set()), ScanStatus::Monitoring);
+        assert_eq!(
+            classify("t1", dec!(0.95), dec!(-0.10), &empty_set(), &empty_set()),
+            ScanStatus::Monitoring
+        );
     }
 
     #[test]
     fn pnl_exactly_at_loss_threshold_is_monitoring() {
         // percent_pnl == -threshold: NOT less than, so passes
-        assert_eq!(classify("t1", dec!(0.50), dec!(-0.40), &empty_set(), &empty_set()), ScanStatus::Monitoring);
+        assert_eq!(
+            classify("t1", dec!(0.50), dec!(-0.40), &empty_set(), &empty_set()),
+            ScanStatus::Monitoring
+        );
     }
 
     #[test]
     fn pnl_one_tick_below_threshold_is_loss_skipped() {
-        assert_eq!(classify("t1", dec!(0.50), dec!(-0.41), &empty_set(), &empty_set()), ScanStatus::SkippedLoss);
+        assert_eq!(
+            classify("t1", dec!(0.50), dec!(-0.41), &empty_set(), &empty_set()),
+            ScanStatus::SkippedLoss
+        );
     }
 
     #[test]
     fn deeply_underwater_is_loss_skipped() {
-        assert_eq!(classify("t1", dec!(0.10), dec!(-0.85), &empty_set(), &empty_set()), ScanStatus::SkippedLoss);
+        assert_eq!(
+            classify("t1", dec!(0.10), dec!(-0.85), &empty_set(), &empty_set()),
+            ScanStatus::SkippedLoss
+        );
     }
 
     #[test]
     fn owned_takes_priority_over_price_range() {
         // Price is below min AND we own it — owned takes priority
-        assert_eq!(classify("t1", dec!(0.01), dec!(-0.10), &token_set(&["t1"]), &empty_set()), ScanStatus::SkippedOwned);
+        assert_eq!(
+            classify(
+                "t1",
+                dec!(0.01),
+                dec!(-0.10),
+                &token_set(&["t1"]),
+                &empty_set()
+            ),
+            ScanStatus::SkippedOwned
+        );
     }
 
     #[test]
     fn queued_takes_priority_over_loss() {
         // Already queued AND deeply underwater — Entered wins
-        assert_eq!(classify("t1", dec!(0.50), dec!(-0.99), &empty_set(), &token_set(&["t1"])), ScanStatus::Entered);
+        assert_eq!(
+            classify(
+                "t1",
+                dec!(0.50),
+                dec!(-0.99),
+                &empty_set(),
+                &token_set(&["t1"])
+            ),
+            ScanStatus::Entered
+        );
     }
 
     #[test]
     fn positive_pnl_is_monitoring() {
-        assert_eq!(classify("t1", dec!(0.60), dec!(0.15), &empty_set(), &empty_set()), ScanStatus::Monitoring);
+        assert_eq!(
+            classify("t1", dec!(0.60), dec!(0.15), &empty_set(), &empty_set()),
+            ScanStatus::Monitoring
+        );
     }
 
     #[test]
     fn zero_loss_threshold_rejects_any_negative_pnl() {
-        let status = classify_position("t1", dec!(0.50), dec!(-0.01),
-            &empty_set(), &empty_set(), min(), max(), dec!(0));
+        let status = classify_position(
+            "t1",
+            dec!(0.50),
+            dec!(-0.01),
+            &empty_set(),
+            &empty_set(),
+            min(),
+            max(),
+            dec!(0),
+        );
         assert_eq!(status, ScanStatus::SkippedLoss);
     }
 
     #[test]
     fn different_tokens_classified_independently() {
         let owned = token_set(&["owned_token"]);
-        assert_eq!(classify("other_token", dec!(0.50), dec!(-0.10), &owned, &empty_set()), ScanStatus::Monitoring);
-        assert_eq!(classify("owned_token", dec!(0.50), dec!(-0.10), &owned, &empty_set()), ScanStatus::SkippedOwned);
+        assert_eq!(
+            classify("other_token", dec!(0.50), dec!(-0.10), &owned, &empty_set()),
+            ScanStatus::Monitoring
+        );
+        assert_eq!(
+            classify("owned_token", dec!(0.50), dec!(-0.10), &owned, &empty_set()),
+            ScanStatus::SkippedOwned
+        );
     }
 }
 
@@ -559,9 +694,9 @@ mod strategy_engine_tests {
     use super::*;
     use polycopier::clients::OrderSubmitter;
     use polycopier::strategy::start_strategy_engine;
-    use std::sync::{Arc, Mutex};
-    use std::pin::Pin;
     use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
     use tokio::sync::{mpsc, RwLock};
 
     fn mock_submitter(log: Arc<Mutex<Vec<OrderRequest>>>) -> OrderSubmitter {
@@ -583,9 +718,17 @@ mod strategy_engine_tests {
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
-        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config.clone());
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config.clone(),
+        );
 
-        tx.send(make_trade("0xabc", dec!(0.50), dec!(10), TradeSide::BUY)).await.unwrap();
+        tx.send(make_trade("0xabc", dec!(0.50), dec!(10), TradeSide::BUY))
+            .await
+            .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         let orders = log.lock().unwrap();
@@ -603,7 +746,14 @@ mod strategy_engine_tests {
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
         start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
 
-        tx.send(make_trade("0xunknown", dec!(0.50), dec!(10), TradeSide::BUY)).await.unwrap();
+        tx.send(make_trade(
+            "0xunknown",
+            dec!(0.50),
+            dec!(10),
+            TradeSide::BUY,
+        ))
+        .await
+        .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         assert!(log.lock().unwrap().is_empty());
@@ -622,7 +772,9 @@ mod strategy_engine_tests {
         start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
 
         // 100 shares * $0.40 = $40 — capped to 10/0.40 = 25 shares
-        tx.send(make_trade("0xabc", dec!(0.40), dec!(100), TradeSide::BUY)).await.unwrap();
+        tx.send(make_trade("0xabc", dec!(0.40), dec!(100), TradeSide::BUY))
+            .await
+            .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         let orders = log.lock().unwrap();
@@ -640,7 +792,9 @@ mod strategy_engine_tests {
         start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
 
         // $0.05 * 0.01 = $0.0005 — below $1 spoofing threshold
-        tx.send(make_trade("0xabc", dec!(0.05), dec!(0.01), TradeSide::BUY)).await.unwrap();
+        tx.send(make_trade("0xabc", dec!(0.05), dec!(0.01), TradeSide::BUY))
+            .await
+            .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         assert!(log.lock().unwrap().is_empty());
@@ -657,7 +811,9 @@ mod strategy_engine_tests {
         start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
 
         // SELL: 0.60 - (0.60 * 0.02) = 0.588
-        tx.send(make_trade("0xabc", dec!(0.60), dec!(5), TradeSide::SELL)).await.unwrap();
+        tx.send(make_trade("0xabc", dec!(0.60), dec!(5), TradeSide::SELL))
+            .await
+            .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         let orders = log.lock().unwrap();
@@ -675,21 +831,37 @@ mod strategy_engine_tests {
         let mut init_state = BotState::new();
         init_state.positions.insert(
             "99999".to_string(),
-            Position { token_id: "99999".to_string(), size: dec!(20), average_entry_price: dec!(0.50) },
+            Position {
+                token_id: "99999".to_string(),
+                size: dec!(20),
+                average_entry_price: dec!(0.50),
+            },
         );
         let state = Arc::new(RwLock::new(init_state));
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
-        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config.clone());
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config.clone(),
+        );
 
         // Target sells 500 shares — we hold only 20
-        tx.send(make_trade("0xabc", dec!(0.60), dec!(500), TradeSide::SELL)).await.unwrap();
+        tx.send(make_trade("0xabc", dec!(0.60), dec!(500), TradeSide::SELL))
+            .await
+            .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         let orders = log.lock().unwrap();
         assert_eq!(orders.len(), 1, "expected exactly one SELL order");
-        assert_eq!(orders[0].size, dec!(19.40), "should be 20 * 0.97, not 500 * 0.97");
+        assert_eq!(
+            orders[0].size,
+            dec!(19.40),
+            "should be 20 * 0.97, not 500 * 0.97"
+        );
         assert_eq!(orders[0].side, TradeSide::SELL);
     }
 
@@ -700,15 +872,27 @@ mod strategy_engine_tests {
         let mut init_state = BotState::new();
         init_state.positions.insert(
             "99999".to_string(),
-            Position { token_id: "99999".to_string(), size: dec!(10), average_entry_price: dec!(0.60) },
+            Position {
+                token_id: "99999".to_string(),
+                size: dec!(10),
+                average_entry_price: dec!(0.60),
+            },
         );
         let state = Arc::new(RwLock::new(init_state));
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
-        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config.clone());
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config.clone(),
+        );
 
-        tx.send(make_trade("0xabc", dec!(0.60), dec!(10), TradeSide::SELL)).await.unwrap();
+        tx.send(make_trade("0xabc", dec!(0.60), dec!(10), TradeSide::SELL))
+            .await
+            .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         let orders = log.lock().unwrap();
@@ -725,9 +909,23 @@ mod strategy_engine_tests {
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
-        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config.clone());
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config.clone(),
+        );
 
-        tx.send(make_trade_for_token("0xabc", "unknown_token", dec!(0.50), dec!(100), TradeSide::SELL)).await.unwrap();
+        tx.send(make_trade_for_token(
+            "0xabc",
+            "unknown_token",
+            dec!(0.50),
+            dec!(100),
+            TradeSide::SELL,
+        ))
+        .await
+        .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         let orders = log.lock().unwrap();
@@ -745,7 +943,11 @@ mod strategy_engine_tests {
         // We hold 15 shares; target only sells 3 (partial close signal)
         init_state.positions.insert(
             "99999".to_string(),
-            Position { token_id: "99999".to_string(), size: dec!(15), average_entry_price: dec!(0.50) },
+            Position {
+                token_id: "99999".to_string(),
+                size: dec!(15),
+                average_entry_price: dec!(0.50),
+            },
         );
         let state = Arc::new(RwLock::new(init_state));
         let risk = RiskEngine::new(config.clone());
@@ -753,7 +955,9 @@ mod strategy_engine_tests {
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
         start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
 
-        tx.send(make_trade("0xabc", dec!(0.60), dec!(3), TradeSide::SELL)).await.unwrap();
+        tx.send(make_trade("0xabc", dec!(0.60), dec!(3), TradeSide::SELL))
+            .await
+            .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         let orders = log.lock().unwrap();
@@ -762,7 +966,10 @@ mod strategy_engine_tests {
         // 15 * 0.97 = 14.55
         assert_eq!(orders[0].size, dec!(14.55));
         // Crucially, sell size must never exceed what we hold
-        assert!(orders[0].size < dec!(15), "sell size must be < held position");
+        assert!(
+            orders[0].size < dec!(15),
+            "sell size must be < held position"
+        );
     }
 }
 

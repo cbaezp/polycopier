@@ -116,20 +116,29 @@ fn render(f: &mut Frame, snap: &Snap, config: &Config) {
 
 // ── Header ────────────────────────────────────────────────────────────────────
 fn render_header(f: &mut Frame, snap: &Snap, config: &Config, area: ratatui::layout::Rect) {
-    let title_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-    let live_style  = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
+    let title_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let live_style = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
     let label_style = Style::default().fg(Color::DarkGray);
-    let val_style   = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
-    let pos_pnl     = pnl_color(snap.realized_pnl + snap.unrealized_pnl);
+    let val_style = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let pos_pnl = pnl_color(snap.realized_pnl + snap.unrealized_pnl);
 
-    let wallet_short  = shorten(&config.funder_address);
-    let targets_short = config.target_wallets
+    let wallet_short = shorten(&config.funder_address);
+    let targets_short = config
+        .target_wallets
         .iter()
         .map(|w| shorten(w))
         .collect::<Vec<_>>()
         .join(", ");
 
-    let watch_count   = snap.target_positions.iter()
+    let watch_count = snap
+        .target_positions
+        .iter()
         .filter(|p| p.status == crate::models::ScanStatus::Monitoring)
         .count();
     let total_scanned = snap.target_positions.len();
@@ -137,7 +146,10 @@ fn render_header(f: &mut Frame, snap: &Snap, config: &Config, area: ratatui::lay
     let lines = vec![
         Line::from(vec![
             Span::styled("  ◆ POLYCOPIER ", title_style),
-            Span::styled("· Automated Copy Trading Engine  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "· Automated Copy Trading Engine  ",
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled("● LIVE", live_style),
         ]),
         Line::from(vec![
@@ -148,32 +160,56 @@ fn render_header(f: &mut Frame, snap: &Snap, config: &Config, area: ratatui::lay
         ]),
         Line::from(vec![
             Span::styled("  Balance: ", label_style),
-            Span::styled(format!("${:.2}", snap.balance), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("${:.2}", snap.balance),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("   │   Realized: ", label_style),
-            Span::styled(format!("${:.2}", snap.realized_pnl), Style::default().fg(pos_pnl)),
+            Span::styled(
+                format!("${:.2}", snap.realized_pnl),
+                Style::default().fg(pos_pnl),
+            ),
             Span::styled("   │   Unrealized: ", label_style),
-            Span::styled(format!("${:.2}", snap.unrealized_pnl), Style::default().fg(pnl_color(snap.unrealized_pnl))),
+            Span::styled(
+                format!("${:.2}", snap.unrealized_pnl),
+                Style::default().fg(pnl_color(snap.unrealized_pnl)),
+            ),
             Span::styled("   │   Copied: ", label_style),
-            Span::styled(format!("{}", snap.copies), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{}", snap.copies),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("   Skipped: ", label_style),
-            Span::styled(format!("{}", snap.skips), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{}", snap.skips),
+                Style::default().fg(Color::Yellow),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Scanner: ", label_style),
-            Span::styled(format!("{} positions tracked", total_scanned), Style::default().fg(Color::White)),
+            Span::styled(
+                format!("{} positions tracked", total_scanned),
+                Style::default().fg(Color::White),
+            ),
             Span::styled("   │   ", label_style),
-            Span::styled(format!("{} entry opportunities", watch_count), Style::default().fg(Color::Green)),
+            Span::styled(
+                format!("{} entry opportunities", watch_count),
+                Style::default().fg(Color::Green),
+            ),
             Span::styled("   │   refreshes every 60s", label_style),
         ]),
     ];
 
-    let header = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Cyan)),
-        );
+    let header = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
     f.render_widget(header, area);
 }
 
@@ -199,67 +235,99 @@ fn render_body(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
 
 // ── Live Feed ────────────────────────────────────────────────────────────────
 fn render_live_feed(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
-    let items: Vec<ListItem> = snap.feed.iter().map(|ev| {
-        let (icon, style) = if ev.validated {
-            ("✔", Style::default().fg(Color::Green))
-        } else {
-            ("✘", Style::default().fg(Color::DarkGray))
-        };
-        let side = match ev.original_event.side {
-            TradeSide::BUY  => "BUY ",
-            TradeSide::SELL => "SELL",
-        };
-        let ts = utils::format_timestamp(ev.original_event.timestamp);
-        let reason = ev.reason.as_deref().unwrap_or("");
-        let text = format!(
-            "{} {} {}  ${:.3}  {:.2}sh  {}",
-            icon, side,
-            &ev.original_event.token_id[..ev.original_event.token_id.len().min(10)],
-            ev.original_event.price,
-            ev.original_event.size,
-            if ev.validated { ts } else { reason.to_string() },
-        );
-        ListItem::new(Line::from(Span::styled(text, style)))
-    }).collect();
+    let items: Vec<ListItem> = snap
+        .feed
+        .iter()
+        .map(|ev| {
+            let (icon, style) = if ev.validated {
+                ("✔", Style::default().fg(Color::Green))
+            } else {
+                ("✘", Style::default().fg(Color::DarkGray))
+            };
+            let side = match ev.original_event.side {
+                TradeSide::BUY => "BUY ",
+                TradeSide::SELL => "SELL",
+            };
+            let ts = utils::format_timestamp(ev.original_event.timestamp);
+            let reason = ev.reason.as_deref().unwrap_or("");
+            let text = format!(
+                "{} {} {}  ${:.3}  {:.2}sh  {}",
+                icon,
+                side,
+                &ev.original_event.token_id[..ev.original_event.token_id.len().min(10)],
+                ev.original_event.price,
+                ev.original_event.size,
+                if ev.validated { ts } else { reason.to_string() },
+            );
+            ListItem::new(Line::from(Span::styled(text, style)))
+        })
+        .collect();
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(Span::styled(" ⚡ Live Copy Feed ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Blue)),
-        );
+    let list = List::new(items).block(
+        Block::default()
+            .title(Span::styled(
+                " ⚡ Live Copy Feed ",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Blue)),
+    );
     f.render_widget(list, area);
 }
 
 // ── Our Positions ─────────────────────────────────────────────────────────────
 fn render_our_positions(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
     let header = Row::new(vec![
-        Cell::from("Token").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Cell::from("Size").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Cell::from("Entry").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-    ]).height(1);
-
-    let rows: Vec<Row> = snap.positions.iter().map(|p| {
-        Row::new(vec![
-            Cell::from(&p.token_id[..p.token_id.len().min(12)] as &str),
-            Cell::from(format!("{:.2}", p.size)),
-            Cell::from(format!("${:.3}", p.average_entry_price)),
-        ]).style(Style::default().fg(Color::White))
-    }).collect();
-
-    let table = Table::new(rows, &[
-        Constraint::Min(13),
-        Constraint::Length(7),
-        Constraint::Length(8),
+        Cell::from("Token").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Size").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Entry").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
     ])
+    .height(1);
+
+    let rows: Vec<Row> = snap
+        .positions
+        .iter()
+        .map(|p| {
+            Row::new(vec![
+                Cell::from(&p.token_id[..p.token_id.len().min(12)] as &str),
+                Cell::from(format!("{:.2}", p.size)),
+                Cell::from(format!("${:.3}", p.average_entry_price)),
+            ])
+            .style(Style::default().fg(Color::White))
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        &[
+            Constraint::Min(13),
+            Constraint::Length(7),
+            Constraint::Length(8),
+        ],
+    )
     .header(header)
     .block(
         Block::default()
             .title(Span::styled(
                 format!(" 💼 Our Positions ({}) ", snap.positions.len()),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -271,37 +339,63 @@ fn render_our_positions(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect)
 // ── Opportunity Scanner ───────────────────────────────────────────────────────
 fn render_scanner(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
     let header = Row::new(vec![
-        Cell::from("STATUS").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Cell::from("MARKET / OUTCOME").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Cell::from("PRICE").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Cell::from("PNL%").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Cell::from("TARGET SZ").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Cell::from("STATUS").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("MARKET / OUTCOME").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("PRICE").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("PNL%").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("TARGET SZ").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
     ])
     .height(1)
     .style(Style::default().add_modifier(Modifier::UNDERLINED));
 
-    let rows: Vec<Row> = snap.target_positions.iter().map(|pos| {
-        let pnl_pct = pos.percent_pnl * Decimal::from(100);
-        let pnl_str = format!("{:+.1}%", pnl_pct);
-        let market  = format!("{} ({})", pos.title, pos.outcome);
-        let market_trunc = if market.len() > 44 {
-            format!("{}…", &market[..44])
-        } else {
-            market.clone()
-        };
+    let rows: Vec<Row> = snap
+        .target_positions
+        .iter()
+        .map(|pos| {
+            let pnl_pct = pos.percent_pnl * Decimal::from(100);
+            let pnl_str = format!("{:+.1}%", pnl_pct);
+            let market = format!("{} ({})", pos.title, pos.outcome);
+            let market_trunc = if market.len() > 44 {
+                format!("{}…", &market[..44])
+            } else {
+                market.clone()
+            };
 
-        let row_style = Style::default().fg(pos.status.color());
-        Row::new(vec![
-            Cell::from(pos.status.label()),
-            Cell::from(market_trunc),
-            Cell::from(format!("${:.3}", pos.cur_price)),
-            Cell::from(pnl_str),
-            Cell::from(format!("{:.1}", pos.size)),
-        ])
-        .style(row_style)
-    }).collect();
+            let row_style = Style::default().fg(pos.status.color());
+            Row::new(vec![
+                Cell::from(pos.status.label()),
+                Cell::from(market_trunc),
+                Cell::from(format!("${:.3}", pos.cur_price)),
+                Cell::from(pnl_str),
+                Cell::from(format!("{:.1}", pos.size)),
+            ])
+            .style(row_style)
+        })
+        .collect();
 
-    let watch = snap.target_positions.iter()
+    let watch = snap
+        .target_positions
+        .iter()
         .filter(|p| p.status == crate::models::ScanStatus::Monitoring)
         .count();
     let total = snap.target_positions.len();
@@ -311,17 +405,25 @@ fn render_scanner(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
         watch, total
     );
 
-    let table = Table::new(rows, &[
-        Constraint::Length(10),
-        Constraint::Min(20),
-        Constraint::Length(7),
-        Constraint::Length(7),
-        Constraint::Length(10),
-    ])
+    let table = Table::new(
+        rows,
+        &[
+            Constraint::Length(10),
+            Constraint::Min(20),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(10),
+        ],
+    )
     .header(header)
     .block(
         Block::default()
-            .title(Span::styled(title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)))
+            .title(Span::styled(
+                title,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Color::Magenta)),
@@ -333,8 +435,14 @@ fn render_scanner(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
 fn render_footer(f: &mut Frame, area: ratatui::layout::Rect) {
     let footer = Paragraph::new(Line::from(vec![
         Span::styled("  [q] Quit", Style::default().fg(Color::Red)),
-        Span::styled("     Press any key to interact", Style::default().fg(Color::DarkGray)),
-        Span::styled("                         POLYCOPIER v0.1 — Powered by Polymarket SDK", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "     Press any key to interact",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            "                         POLYCOPIER v0.1 — Powered by Polymarket SDK",
+            Style::default().fg(Color::DarkGray),
+        ),
     ]))
     .alignment(Alignment::Left);
     f.render_widget(footer, area);

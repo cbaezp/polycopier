@@ -1,20 +1,17 @@
 use crate::config::Config;
 use crate::models::{TradeEvent, TradeSide};
-use anyhow::Result;
-use tokio::sync::mpsc;
-use tracing::{info, error};
-use polymarket_client_sdk::data::Client as DataClient;
-use polymarket_client_sdk::data::types::request::TradesRequest;
 use alloy::primitives::Address;
-use std::str::FromStr;
+use anyhow::Result;
 use chrono::Utc;
+use polymarket_client_sdk::data::types::request::TradesRequest;
+use polymarket_client_sdk::data::Client as DataClient;
+use std::str::FromStr;
+use tokio::sync::mpsc;
+use tracing::{error, info};
 
-pub async fn start_ws_listener(
-    config: &Config,
-    tx: mpsc::Sender<TradeEvent>,
-) -> Result<()> {
+pub async fn start_ws_listener(config: &Config, tx: mpsc::Sender<TradeEvent>) -> Result<()> {
     let targets = config.target_wallets.clone();
-    
+
     // Using Data API to poll arbitrary wallet trades since WS is auth-limited
     let data_client = DataClient::default();
 
@@ -31,8 +28,8 @@ pub async fn start_ws_listener(
                     Ok(addr) => addr,
                     Err(_) => continue,
                 };
-                
-                // Fetch recent manual trades for target 
+
+                // Fetch recent manual trades for target
                 let req = TradesRequest::builder()
                     .user(target_addr)
                     .limit(5)

@@ -1,20 +1,20 @@
-use crate::config::Config;
-use crate::models::{TradeEvent, EvaluatedTrade, TradeSide, OrderRequest};
-use crate::state::BotState;
-use crate::risk::RiskEngine;
 use crate::clients::OrderSubmitter;
-use std::sync::Arc;
-use std::collections::HashMap;
-use tokio::sync::{mpsc, RwLock};
-use tracing::{info, warn, debug};
+use crate::config::Config;
+use crate::models::{EvaluatedTrade, OrderRequest, TradeEvent, TradeSide};
+use crate::risk::RiskEngine;
+use crate::state::BotState;
 use rust_decimal::Decimal;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{mpsc, RwLock};
+use tracing::{debug, info, warn};
 
 // ── Pure helpers (extracted for testability) ──────────────────────────────────
 
 /// Applies slippage to a price to produce the limit order price.
 pub fn calculate_limit_price(price: Decimal, side: TradeSide, slippage_pct: Decimal) -> Decimal {
     match side {
-        TradeSide::BUY  => price + (price * slippage_pct),
+        TradeSide::BUY => price + (price * slippage_pct),
         TradeSide::SELL => price - (price * slippage_pct),
     }
 }
@@ -38,7 +38,7 @@ pub fn start_strategy_engine(
 ) {
     tokio::spawn(async move {
         info!("Strategy Engine Started. Monitoring edge cases (debouncing, closures...)");
-        
+
         // Target -> AssetID -> Token Info/Debounce Context
         let mut debounce_cache: HashMap<String, TradeEvent> = HashMap::new();
 
@@ -57,13 +57,19 @@ pub fn start_strategy_engine(
 
             // 4. Fragmented Fill Edge Case (Debounce 200ms)
             // A simplified debounce: Just track timestamp diff. If same token < 1 sec, accumulate sizes.
-            let cache_key = format!("{}_{}_{:?}", event.taker_address, event.token_id, event.side);
+            let cache_key = format!(
+                "{}_{}_{:?}",
+                event.taker_address, event.token_id, event.side
+            );
             if eval.validated {
                 if let Some(existing) = debounce_cache.get_mut(&cache_key) {
                     if (chrono::Utc::now().timestamp() - existing.timestamp) < 1 {
                         existing.size += event.size;
-                        debug!("Debounced fragmented fill for {}. New size: {}", existing.token_id, existing.size);
-                        continue; 
+                        debug!(
+                            "Debounced fragmented fill for {}. New size: {}",
+                            existing.token_id, existing.size
+                        );
+                        continue;
                     } else {
                         // Expired, flush it out
                         debounce_cache.insert(cache_key.clone(), event.clone());
@@ -92,7 +98,7 @@ pub fn start_strategy_engine(
 
                 // Check Proportional Closure logic
                 let is_closing = event.side == TradeSide::SELL;
-                
+
                 let limit_price = if event.side == TradeSide::BUY {
                     event.price + (event.price * config.max_slippage_pct)
                 } else {
@@ -106,7 +112,9 @@ pub fn start_strategy_engine(
                     let fee_factor = Decimal::new(97, 2); // 0.97 — CLOB fee buffer for SELLs
                     let our_held_size = {
                         let guard = state.read().await;
-                        guard.positions.get(&event.token_id)
+                        guard
+                            .positions
+                            .get(&event.token_id)
                             .map(|p| p.size)
                             .unwrap_or(Decimal::ZERO)
                     };

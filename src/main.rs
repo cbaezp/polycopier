@@ -1,18 +1,18 @@
+pub mod clients;
 pub mod config;
 pub mod listener;
-pub mod strategy;
+pub mod models;
+pub mod position_scanner;
 pub mod risk;
 pub mod state;
+pub mod strategy;
 pub mod ui;
-pub mod models;
-pub mod clients;
 pub mod utils;
-pub mod position_scanner;
 
-use tracing::{info, Level};
-use tracing_subscriber::FmtSubscriber;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{info, Level};
+use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,14 +22,13 @@ async fn main() -> anyhow::Result<()> {
         .with_max_level(Level::INFO)
         // .with_writer(std::fs::File::create("bot.log")?)
         .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("setting default subscriber failed");
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     info!("Starting Polymarket Copy Trading Bot...");
 
     // 2. Load Configuration via Prompt Wizard
     let config = config::Config::load_or_prompt().await?;
-    
+
     // 3. Initialize Shared State
     let state = Arc::new(RwLock::new(state::BotState::new()));
 
@@ -49,15 +48,11 @@ async fn main() -> anyhow::Result<()> {
         state.clone(),
         risk_engine,
         poly_submitter,
-        config.clone()
+        config.clone(),
     );
 
     // 9. Scan target wallets for pre-existing open positions (startup + every 60s)
-    position_scanner::start_position_scanner(
-        config.clone(),
-        state.clone(),
-        event_tx,
-    );
+    position_scanner::start_position_scanner(config.clone(), state.clone(), event_tx);
 
     // 8. Poll live USDC balance every 10 seconds and update TUI
     {

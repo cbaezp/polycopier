@@ -1,16 +1,16 @@
 use crate::config::Config;
 use crate::models::{ScanStatus, TargetPosition, TradeEvent, TradeSide};
 use crate::state::BotState;
+use alloy::primitives::Address;
 use anyhow::Result;
-use polymarket_client_sdk::data::Client as DataClient;
 use polymarket_client_sdk::data::types::request::PositionsRequest;
+use polymarket_client_sdk::data::Client as DataClient;
 use rust_decimal::Decimal;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
-use alloy::primitives::Address;
 
 const SCAN_INTERVAL_SECS: u64 = 60;
 const MIN_ENTRY_PRICE: &str = "0.02";
@@ -43,7 +43,6 @@ pub fn classify_position(
         ScanStatus::Monitoring
     }
 }
-
 
 pub fn start_position_scanner(
     config: Config,
@@ -110,7 +109,11 @@ async fn scan_positions(
             }
         };
 
-        info!("Scanner: {} has {} open position(s)", wallet_str, positions.len());
+        info!(
+            "Scanner: {} has {} open position(s)",
+            wallet_str,
+            positions.len()
+        );
 
         for pos in positions {
             let token_id = pos.asset.to_string();
@@ -176,8 +179,11 @@ async fn scan_positions(
 
     // Sort: WATCH first, then QUEUED, HELD, LOSS, RANGE; within each by pnl desc
     all_positions.sort_by(|a, b| {
-        a.status.sort_key().cmp(&b.status.sort_key())
-            .then(b.percent_pnl.partial_cmp(&a.percent_pnl).unwrap_or(std::cmp::Ordering::Equal))
+        a.status.sort_key().cmp(&b.status.sort_key()).then(
+            b.percent_pnl
+                .partial_cmp(&a.percent_pnl)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
     });
 
     // Batch-write all positions to state
@@ -188,7 +194,10 @@ async fn scan_positions(
 
     // Queue entry events after releasing lock
     for (token_id, event) in to_enter {
-        info!("Scanner queuing entry for token {}", &token_id[..token_id.len().min(12)]);
+        info!(
+            "Scanner queuing entry for token {}",
+            &token_id[..token_id.len().min(12)]
+        );
         already_queued.insert(token_id);
         if let Err(e) = tx.send(event).await {
             warn!("Failed to send scan event: {}", e);
