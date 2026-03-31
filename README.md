@@ -78,13 +78,12 @@ The entire interface is a terminal UI (TUI) with no browser required.
 
 - **Live balance tracking** - CLOB balance polled every 10 seconds.
 
-- **Four-mode proportional sizing** - choose how each trade is sized:
+- **Three-mode proportional sizing** - choose how each trade is sized:
 
   | Mode | Formula | When to use |
   |---|---|---|
-  | `target_pct` (default) | `(target_notional / target_portfolio) * our_balance` | Mirror the target's risk proportion |
+  | `self_pct` (default) | `our_balance * COPY_SIZE_PCT` | Fixed % of our balance per trade — consistent and predictable |
   | `target_usd` | `target_size * target_price` | Mirror the target's exact dollar bet |
-  | `self_pct` | `our_balance * COPY_SIZE_PCT` | Fixed % of our own balance per trade |
   | `fixed` | Always `MAX_TRADE_SIZE_USD` | Simple deterministic size |
 
   All modes enforce a $5.00 CLOB minimum and `MAX_TRADE_SIZE_USD` ceiling.
@@ -179,8 +178,8 @@ cargo run --release
 | `PRIVATE_KEY` | Yes | - | Hex private key for the signing wallet (`0x...` or plain hex) |
 | `FUNDER_ADDRESS` | Yes | - | Proxy/Safe wallet address that holds USDC (shown on your Polymarket profile) |
 | `TARGET_WALLETS` | Yes | - | Comma-separated list of target proxy wallet addresses to copy |
-| `SIZING_MODE` | No | `target_pct` | Sizing strategy: `target_pct`, `target_usd`, `self_pct`, or `fixed` |
-| `COPY_SIZE_PCT` | No | - | Fraction of our balance per trade (only used when `SIZING_MODE=self_pct`, e.g. `0.05` = 5%) |
+| `SIZING_MODE` | No | `self_pct` | Sizing strategy: `self_pct`, `target_usd`, or `fixed` |
+| `COPY_SIZE_PCT` | No | `0.15` | Fraction of our balance per trade when `SIZING_MODE=self_pct` (e.g. `0.15` = 15%) |
 | `MAX_SLIPPAGE_PCT` | No | `0.02` | Maximum allowed price deviation from the copied trade (2% = `0.02`) |
 | `MAX_TRADE_SIZE_USD` | No | `10.00` | Maximum USDC to spend per copied trade |
 | `MAX_DELAY_SECONDS` | No | `10` | Discard live trade events (listener) older than this many seconds |
@@ -213,8 +212,8 @@ On first run with an empty or placeholder `.env`, the setup wizard prompts for:
 1. Private key (hidden input)
 2. Funder address
 3. Target wallet addresses
-4. Sizing mode (menu: `target_pct` / `target_usd` / `self_pct` / `fixed`)
-5. `COPY_SIZE_PCT` only if `self_pct` was chosen
+4. Sizing mode (menu: `self_pct` / `target_usd` / `fixed`)
+5. `COPY_SIZE_PCT` only if `self_pct` was chosen (default 15%)
 6. Slippage, trade size, delay, and loss-threshold limits
 
 All values are saved to `.env` and reused on subsequent runs.
