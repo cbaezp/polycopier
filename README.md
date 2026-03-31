@@ -92,13 +92,37 @@ The entire interface is a terminal UI (TUI) with no browser required.
 - **Risk engine** - per-trade minimum notional ($5.00 CLOB floor), per-trade size cap (`MAX_TRADE_SIZE_USD`), and
   per-position drawdown filter (`MAX_COPY_LOSS_PCT`).
 
-- **Terminal UI** - five-panel ratatui interface:
+- **Terminal UI** - six-panel ratatui interface:
   - Account dashboard (balance, PnL, **API-sourced Copied counter**)
   - Live copy feed (pass/fail, skip reason per event)
-  - Your open positions
-  - Opportunity scanner table (color-coded by status)
+  - **Copied & Open positions table** (only positions confirmed open in both our wallet
+    and a target wallet; shows SOURCE WALLET, entry quality, OUR_PNL%)
+  - Opportunity scanner table (color-coded by status, live refresh timing)
   - **Settings panel** (live config summary, `[s]` to open wizard)
   - **System Logs panel** (WARN+ captured in-memory, never corrupts the TUI)
+
+- **Entry quality analysis** - the Copied & Open table shows per-row entry comparison:
+
+  | Column | Description |
+  |---|---|
+  | SOURCE | Target wallet the position was copied from (shortened) |
+  | TOKEN | First 12 chars of the token ID |
+  | OUR ENTRY | Our average entry price |
+  | TGT ENTRY | Target's average entry price |
+  | DELTA% | `(our_entry - tgt_entry) / tgt_entry`: how much more we paid |
+  | CUR PRICE | Current market price (refreshed independently every 20s) |
+  | OUR PNL% | `(cur_price - our_entry) / our_entry`: our estimated P&L |
+
+  Row color codes: green (DELTA <= +5%), yellow (+5-15%), red (>+15% -- chased).
+
+- **Live refresh timing** - scanner panel header shows:
+  `scan: 12s ago  next: 48s  prices: 7s ago`
+  so you can always see exactly when each data source last refreshed.
+
+- **Independent price refresh task** - `CUR PRICE` and `OUR_PNL%` are refreshed
+  every 20 seconds regardless of scanner urgency. The scanner's adaptive interval
+  can reach 60s when all positions are deeply in-the-money, but prices in the
+  Copied table stay at most 20s stale via a dedicated background fetch.
 
 - **In-TUI settings** - press `[s]` to exit the TUI, run the interactive wizard,
   save a new `.env`, and restart with the updated configuration.
@@ -227,6 +251,7 @@ main.rs
   +-- listener.rs         Data API polling loop (2s, hash-dedup) -> TradeEvent channel
   |
   +-- position_scanner.rs Catch-up scanner (adaptive 10-60s) -> TradeEvent channel
+  |                        Updates target_positions (all fields) on each cycle.
   |
   +-- copied_counter.rs   API-based Copied counter (our wallet x target wallets, 30s)
   |
@@ -236,15 +261,15 @@ main.rs
   +-- risk.rs             RiskEngine: minimum notional, max size enforcement
   |
   +-- state.rs            Shared BotState (Arc<RwLock<_>>): balance, our positions,
-  |                        target positions, live feed, TUI counters
+  |                        target positions, live feed, TUI counters, refresh timestamps
   |
-  +-- ui.rs               ratatui TUI: dashboard, live feed, positions, scanner,
-  |                        settings panel, system logs panel
+  +-- ui.rs               ratatui TUI: dashboard, live feed, Copied & Open positions,
+  |                        scanner (with live refresh timing), settings, system logs
   |
   +-- log_capture.rs      TuiLogLayer: captures WARN+ to in-memory ring buffer
   |
-  +-- models.rs           Core types: TradeEvent, EvaluatedTrade, TargetPosition,
-  |                        ScanStatus, SizingMode
+  +-- models.rs           Core types: TradeEvent, EvaluatedTrade, TargetPosition
+  |                        (including source_wallet), ScanStatus, SizingMode
   +-- utils.rs            Timestamp formatting helpers
 ```
 
@@ -253,20 +278,36 @@ main.rs
 ```
 Polymarket Data API
     |
-    +-- listener (2s poll, limit 20, hash-dedup) -----> mpsc::Sender<TradeEvent>
+    +-- listener (2s poll, limit 20, hash-dedup) ------> mpsc::Sender<TradeEvent>
     |                                                              |
-    +-- position_scanner (adaptive 10-60s poll) -----> mpsc::Sender<TradeEvent> (cloned)
-                                                                   |
-                                                         strategy engine
-                                                           - wallet filter
-                                                           - intent classification
-                                                             (target_positions lookup)
-                                                           - risk check (notional, size)
-                                                           - SELL guard (must hold position)
-                                                           - 97% SELL buffer
+    +-- position_scanner (adaptive 10-60s poll) ------> mpsc::Sender<TradeEvent> (cloned)
+    |   Writes: target_positions (all fields, including cur_price)
+    |   Writes: last_scan_at, next_scan_secs
+    |                                                    strategy engine
+    +-- price_refresh (20s, independent of scanner) -----> patches cur_price in
+    |   Writes: last_price_refresh_at                    target_positions only
+    |                                                              |
+    +-- copied_counter (30s)                                      |
+    |   Writes: copied_count (our positions x target positions)   |
+    |                                                    wallet filter
+    +-- balance_poll (10s)                               intent classification
+        Writes: total_balance                            risk check (notional, size)
+                                                         SELL guard
                                                                    |
                                                          CLOB API  (order submission)
 ```
+
+### Data freshness
+
+| Data | Refresh interval | Background task |
+|---|---|---|
+| Live trade events | 2s | listener |
+| USDC balance | 10s | balance poll |
+| Prices in Copied table (CUR PRICE, OUR PNL%) | 20s | price refresh |
+| Copied count (header) | 30s | copied_counter |
+| Full target portfolio (scanner table, entry classification) | 10-60s adaptive | position_scanner |
+| TUI render | 250ms | event loop |
+
 
 ---
 
@@ -303,7 +344,7 @@ The scanner reschedules itself after each cycle based on the best available oppo
 # Run with live reloading (requires cargo-watch)
 cargo watch -x run
 
-# Run the full test suite (127 tests, all pure/unit - no network)
+# Run the full test suite (125 tests, all pure/unit - no network)
 cargo test --all
 
 # Lint
@@ -343,10 +384,15 @@ git config core.hooksPath .githooks
 
 Releases are created automatically by GitHub Actions.
 
-**On every merge to `main`:** the CI workflow auto-bumps the patch version of the
+**On every merge to `main`:** the release workflow auto-bumps the patch version of the
 latest semver tag (e.g. `v0.1.0` -> `v0.1.1`), creates an annotated tag, builds
 binaries for macOS (Apple Silicon), macOS (Intel), and Linux, and publishes a
 GitHub Release with the artifacts attached.
+
+The workflow avoids the double-trigger problem: after the `version` job pushes an
+auto-generated tag, the tag-triggered re-run recognizes it was started by
+`github-actions[bot]` and skips its own `build` and `release` jobs, leaving only
+the original branch-triggered run to complete.
 
 **Manual release:** push any `v*` tag directly:
 
