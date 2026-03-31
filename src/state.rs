@@ -12,6 +12,10 @@ pub struct BotState {
     pub target_positions: Vec<TargetPosition>,
     pub copies_executed: u32,
     pub trades_skipped: u32,
+    /// Estimated total invested capital of the target wallet(s).
+    /// Computed each scan cycle as Σ(avg_price × size) across all target open positions.
+    /// Used by `SizingMode::TargetPct` to compute proportional order sizes.
+    pub target_portfolio_usd: Decimal,
 }
 
 impl BotState {
@@ -26,6 +30,7 @@ impl BotState {
             target_positions: Vec::new(),
             copies_executed: 0,
             trades_skipped: 0,
+            target_portfolio_usd: Decimal::ZERO,
         }
     }
 
@@ -39,16 +44,6 @@ impl BotState {
             self.live_feed.pop_back();
         }
         self.live_feed.push_front(trade);
-    }
-
-    /// Sum of (size × cur_price) across all cached target positions.
-    /// Used by MirrorTarget sizing to compute the target's total deployed portfolio value.
-    /// Returns Decimal::ZERO if no target positions have been loaded yet.
-    pub fn target_portfolio_usd(&self) -> Decimal {
-        self.target_positions
-            .iter()
-            .map(|p| p.size * p.cur_price)
-            .fold(Decimal::ZERO, |acc, v| acc + v)
     }
 }
 

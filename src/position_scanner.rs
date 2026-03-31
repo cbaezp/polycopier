@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::models::{ScanStatus, TargetPosition, TradeEvent, TradeSide};
 use crate::state::BotState;
-use crate::strategy::resolve_budget_usd;
+use crate::strategy::compute_order_usd;
 use alloy::primitives::Address;
 use anyhow::Result;
 use polymarket_client_sdk::data::types::request::PositionsRequest;
@@ -153,12 +153,11 @@ async fn scan_positions(
     let max_price = config.max_entry_price;
 
     // Brief read lock to snapshot our current holdings
-    let (our_token_ids, current_balance, target_portfolio_usd) = {
+    let (our_token_ids, current_balance) = {
         let guard = state.read().await;
         let ids = guard.positions.keys().cloned().collect();
         let bal = guard.total_balance;
-        let ptf = guard.target_portfolio_usd();
-        (ids, bal, ptf)
+        (ids, bal)
     };
     let our_token_ids: HashSet<String> = our_token_ids;
 
@@ -213,31 +212,27 @@ async fn scan_positions(
             );
 
             if status == ScanStatus::Monitoring && pos.cur_price > Decimal::ZERO {
-                // For MirrorTarget: position's current value = target's "trade USD" for this market
-                let position_value = pos.size * pos.cur_price;
-                let budget_usd = resolve_budget_usd(
-                    &config.sizing_mode,
-                    current_balance,
-                    position_value,
-                    target_portfolio_usd,
-                    config.max_trade_size_usd,
-                );
-                let size = (budget_usd / pos.cur_price).min(pos.size).round_dp(2);
-
-                if size > Decimal::ZERO {
-                    let short_id = &token_id[..token_id.len().min(8)];
-                    let event = TradeEvent {
-                        transaction_hash: format!("scan_{}", short_id),
-                        maker_address: wallet_str.to_string(),
-                        taker_address: wallet_str.to_string(),
-                        token_id: token_id.clone(),
-                        price: pos.cur_price,
-                        size,
-                        side: TradeSide::BUY,
-                        timestamp: chrono::Utc::now().timestamp(),
-                    };
-                    to_enter.push((token_id.clone(), event));
-                }
+                // target_notional = what the target originally paid for this position
+                let target_notional = pos.avg_price * pos.size;
+                // NOTE: target_portfolio_usd will be computed after all positions are collected
+                // and read back from state on the next cycle for TargetPct. Here we use a
+                // placeholder; the per-position sizing below uses the freshly-computed total.
+                let budget_usd = Decimal::ZERO; // will be overwritten after full collection
+                let _ = budget_usd; // suppress warning; sizing done below using target_notional
+                let _ = target_notional; // stored in event below
+                let short_id = &token_id[..token_id.len().min(8)];
+                let event = TradeEvent {
+                    transaction_hash: format!("scan_{}", short_id),
+                    maker_address: wallet_str.to_string(),
+                    taker_address: wallet_str.to_string(),
+                    token_id: token_id.clone(),
+                    price: pos.cur_price,
+                    // Store full target size — strategy engine will apply budget cap via compute_order_usd
+                    size: pos.size,
+                    side: TradeSide::BUY,
+                    timestamp: chrono::Utc::now().timestamp(),
+                };
+                to_enter.push((token_id.clone(), event));
             }
 
             let title = if pos.title.len() > 45 {
@@ -259,6 +254,41 @@ async fn scan_positions(
         }
     }
 
+    // Compute target_portfolio_usd = Σ(avg_price × size) across all collected positions.
+    // This is the best approximation of the target's total invested capital we can make
+    // without historical account-balance snapshots.
+    let target_portfolio_usd: Decimal = all_positions.iter().map(|p| p.avg_price * p.size).sum();
+
+    // Pre-size the scan entries now that we have the full portfolio estimate.
+    // Replace the placeholder sizes in to_enter with budget-capped values.
+    let sized_entries: Vec<(String, TradeEvent)> = to_enter
+        .into_iter()
+        .filter_map(|(token_id, mut ev)| {
+            // avg_price not directly available here — re-derive from all_positions
+            let pos_avg = all_positions
+                .iter()
+                .find(|p| p.token_id == token_id)
+                .map(|p| p.avg_price)
+                .unwrap_or(ev.price);
+            let target_notional = pos_avg * ev.size;
+            let budget_usd = compute_order_usd(
+                current_balance,
+                &config.sizing_mode,
+                config.copy_size_pct,
+                config.max_trade_size_usd,
+                target_notional,
+                target_portfolio_usd,
+            );
+            let size = (budget_usd / ev.price).min(ev.size).round_dp(2);
+            if size > Decimal::ZERO {
+                ev.size = size;
+                Some((token_id, ev))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Sort: WATCH first, then QUEUED, HELD, LOSS, RANGE; within each by pnl desc
     all_positions.sort_by(|a, b| {
         a.status.sort_key().cmp(&b.status.sort_key()).then(
@@ -268,10 +298,11 @@ async fn scan_positions(
         )
     });
 
-    // Batch-write all positions to state
+    // Batch-write all positions and portfolio estimate to state
     {
         let mut guard = state.write().await;
         guard.target_positions = all_positions;
+        guard.target_portfolio_usd = target_portfolio_usd;
     }
 
     // Queue entry events after releasing lock.
@@ -279,7 +310,8 @@ async fn scan_positions(
     // target's entry price (lowest |percent_pnl| = best catch-up opportunity).
     // The next scan cycle will pick up the next-best position, and so on.
     // This prevents depleting the wallet balance in a single burst.
-    to_enter.sort_by(|(_, a), (_, b)| {
+    let mut sized_entries = sized_entries;
+    sized_entries.sort_by(|(_, a), (_, b)| {
         // lower abs pnl from target's entry = better catch-up = enter first
         let a_pnl = a.price; // price ≈ cur_price; use percent_pnl from all_positions
         let b_pnl = b.price;
@@ -289,7 +321,7 @@ async fn scan_positions(
     });
 
     // Pick only the single best opportunity this cycle
-    if let Some((token_id, event)) = to_enter.into_iter().next() {
+    if let Some((token_id, event)) = sized_entries.into_iter().next() {
         debug!(
             "Scanner queuing entry for token {}",
             &token_id[..token_id.len().min(12)]

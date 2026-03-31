@@ -31,6 +31,8 @@ struct Snap {
     target_positions: Vec<TargetPosition>,
     copies: u32,
     skips: u32,
+    /// Only Some when sizing_mode == TargetPct; displayed in scanner header.
+    target_portfolio_est: Option<Decimal>,
 }
 
 fn shorten(addr: &str) -> String {
@@ -71,6 +73,12 @@ pub async fn start_tui(state: Arc<RwLock<BotState>>, config: Config) -> Result<(
                 target_positions: g.target_positions.clone(),
                 copies: g.copies_executed,
                 skips: g.trades_skipped,
+                target_portfolio_est: if config.sizing_mode == crate::models::SizingMode::TargetPct
+                {
+                    Some(g.target_portfolio_usd)
+                } else {
+                    None
+                },
             }
         };
 
@@ -400,10 +408,17 @@ fn render_scanner(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
         .count();
     let total = snap.target_positions.len();
 
-    let title = format!(
-        " 🔎 Opportunity Scanner  — {} watching / {} tracked ",
-        watch, total
-    );
+    let title = if let Some(portfolio) = snap.target_portfolio_est {
+        format!(
+            " {} Opportunity Scanner  — {} watching / {} tracked | Est. target portfolio: ${:.0} ",
+            '\u{1F50E}', watch, total, portfolio
+        )
+    } else {
+        format!(
+            " {} Opportunity Scanner  — {} watching / {} tracked ",
+            '\u{1F50E}', watch, total
+        )
+    };
 
     let table = Table::new(
         rows,

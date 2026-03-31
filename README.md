@@ -137,12 +137,27 @@ cargo run --release
 | `FUNDER_ADDRESS` | Yes | — | ✅ | Proxy/Safe wallet address that holds USDC (shown on your Polymarket profile) |
 | `TARGET_WALLETS` | Yes | — | ✅ | Comma-separated list of target proxy wallet addresses to copy |
 | `MAX_SLIPPAGE_PCT` | No | `0.02` | ✅ | Maximum allowed price deviation from the copied trade (2% = `0.02`) |
-| `MAX_TRADE_SIZE_USD` | No | `50.00` | ✅ | Hard cap: maximum USDC to spend on any single copied trade |
+| `MAX_TRADE_SIZE_USD` | No | `50.00` | ✅ | Hard ceiling: maximum USDC per trade, regardless of sizing mode |
 | `MAX_DELAY_SECONDS` | No | `10` | ✅ | Discard live trade events older than this many seconds |
-| `MAX_COPY_LOSS_PCT` | No | `0.20` | ✅ | Skip catch-up entries where the target is already this far underwater (20% = `0.20`) |
-| `COPY_SIZE_PCT` | No | `0.10` | ✅ | Size each trade as this fraction of available balance (10% = `0.10`). Floored at $5 (CLOB minimum), capped at `MAX_TRADE_SIZE_USD`. Set to blank/0 to always use `MAX_TRADE_SIZE_USD` exactly. |
+| `MAX_COPY_LOSS_PCT` | No | `0.20` | ✅ | Skip catch-up entries where the target is already this far underwater |
+| `SIZING_MODE` | No | `target_pct` | ✅ | **Trade sizing strategy** (see table below). One of: `fixed`, `self_pct`, `target_usd`, `target_pct` |
+| `COPY_SIZE_PCT` | No | — | ✅* | Fraction of YOUR balance per trade. *Only prompted when `SIZING_MODE=self_pct` |
 | `MIN_ENTRY_PRICE` | No | `0.02` | — | Minimum token price for catch-up entries (filters near-zero dust) |
-| `MAX_ENTRY_PRICE` | No | `0.999` | — | Maximum token price for catch-up entries. Set to `0.999` for targets who trade high-confidence NO positions. |
+| `MAX_ENTRY_PRICE` | No | `0.999` | — | Maximum token price for catch-up entries |
+
+### Sizing Modes
+
+All modes floor at $5.00 (CLOB minimum lot) and cap at `MAX_TRADE_SIZE_USD`.
+
+| `SIZING_MODE` | Formula | Best for |
+|---|---|---|
+| `fixed` | Always `MAX_TRADE_SIZE_USD` | Simple fixed-size testing |
+| `self_pct` | `our_balance × COPY_SIZE_PCT` | Scaling with our own wallet size |
+| `target_usd` | `event.size × event.price` (the target's exact $ bet) | Mirroring dollar amounts |
+| `target_pct` ⭐ | `(target_notional / target_portfolio_est) × our_balance` | Mirroring risk proportions |
+
+`target_pct` uses an approximation of the target's portfolio (`Σ avg_price × size` across open positions, refreshed each scan cycle). When active, the TUI scanner panel displays `Est. target portfolio: $X,XXX` so you can validate the estimate.
+
 
 ### Wallet Type
 

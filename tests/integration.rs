@@ -31,6 +31,7 @@ fn test_config() -> polycopier::config::Config {
         min_entry_price: dec!(0.02),
         max_entry_price: dec!(0.999),
         sizing_mode: SizingMode::Fixed,
+        copy_size_pct: None,
     }
 }
 

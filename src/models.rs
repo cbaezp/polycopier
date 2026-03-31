@@ -2,6 +2,47 @@ use ratatui::style::Color;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+/// Controls how order sizes are computed for each copied trade.
+/// Set via the `SIZING_MODE` env var. Mutually exclusive — only one is active at a time.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum SizingMode {
+    /// Always spend exactly `MAX_TRADE_SIZE_USD` per trade.
+    #[default]
+    Fixed,
+    /// Spend `COPY_SIZE_PCT` × our current balance (floored at CLOB $5 minimum,
+    /// capped at `MAX_TRADE_SIZE_USD`).
+    SelfPct,
+    /// Mirror the target's exact dollar notional (`event.size × event.price`),
+    /// capped at `MAX_TRADE_SIZE_USD`.
+    TargetUsd,
+    /// Scale the target's portfolio proportion to our wallet:
+    /// `(target_notional / target_portfolio_est) × our_balance`,
+    /// floored at $5, capped at `MAX_TRADE_SIZE_USD`.
+    /// `target_portfolio_est` is approximated as Σ(avg_price × size) of the target's
+    /// open positions, refreshed each scan cycle.
+    TargetPct,
+}
+
+impl SizingMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fixed => "fixed",
+            Self::SelfPct => "self_pct",
+            Self::TargetUsd => "target_usd",
+            Self::TargetPct => "target_pct",
+        }
+    }
+
+    pub fn from_mode_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "self_pct" => Self::SelfPct,
+            "target_usd" => Self::TargetUsd,
+            "target_pct" => Self::TargetPct,
+            _ => Self::Fixed,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeEvent {
     pub transaction_hash: String,
