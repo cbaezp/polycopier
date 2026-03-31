@@ -143,8 +143,8 @@ impl SettingsScreen {
             SettingsField::new(
                 "Sizing Mode",
                 "SIZING_MODE",
-                "target_pct",
-                "fixed | self_pct | target_usd | target_pct",
+                "self_pct",
+                "fixed | self_pct | target_usd",
                 false,
             ),
             SettingsField::new(
@@ -365,13 +365,7 @@ pub async fn start_tui(
                         feed: g.live_feed.iter().take(20).cloned().collect(),
                         positions: g.positions.values().cloned().collect(),
                         target_positions: g.target_positions.clone(),
-                        target_portfolio_est: if config.sizing_mode
-                            == crate::models::SizingMode::TargetPct
-                        {
-                            Some(g.target_portfolio_usd)
-                        } else {
-                            None
-                        },
+                        target_portfolio_est: None,
                         copied_count: g.copied_count,
                         skips: g.trades_skipped,
                         logs,
@@ -1450,15 +1444,7 @@ mod settings_tests {
         let mut s = SettingsScreen::new();
         // Override values to known state regardless of real .env
         let known = [
-            "0xWallet",
-            "10.00",
-            "0.02",
-            "2",
-            "0.40",
-            "0.02",
-            "0.999",
-            "target_pct",
-            "",
+            "0xWallet", "10.00", "0.02", "2", "0.40", "0.02", "0.999", "self_pct", "",
         ];
         for (f, v) in s.fields.iter_mut().zip(known.iter()) {
             f.value = v.to_string();

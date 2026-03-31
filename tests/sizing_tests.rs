@@ -1,7 +1,6 @@
-//! Tests for `compute_order_usd` -- all four SizingMode variants.
+//! Tests for `compute_order_usd` -- all SizingMode variants.
 //!
-//! Covers: Fixed, SelfPct, TargetUsd, TargetPct, floor/cap guards,
-//! zero-portfolio fallback, misconfigured max < min.
+//! Covers: Fixed, SelfPct, TargetUsd, floor/cap guards, misconfigured max < min.
 
 mod common;
 
@@ -18,7 +17,6 @@ fn size(
     copy_size_pct: Option<rust_decimal::Decimal>,
     max_trade_usd: impl Into<rust_decimal::Decimal>,
     target_notional: impl Into<rust_decimal::Decimal>,
-    target_portfolio_usd: impl Into<rust_decimal::Decimal>,
 ) -> rust_decimal::Decimal {
     compute_order_usd(
         our_balance.into(),
@@ -26,7 +24,6 @@ fn size(
         copy_size_pct,
         max_trade_usd.into(),
         target_notional.into(),
-        target_portfolio_usd.into(),
     )
 }
 
@@ -34,35 +31,14 @@ fn size(
 
 #[test]
 fn fixed_always_returns_max() {
-    let usd = size(
-        dec!(500),
-        &SizingMode::Fixed,
-        None,
-        dec!(10),
-        dec!(0),
-        dec!(0),
-    );
+    let usd = size(dec!(500), &SizingMode::Fixed, None, dec!(10), dec!(0));
     assert_eq!(usd, dec!(10));
 }
 
 #[test]
 fn fixed_ignores_balance_changes() {
-    let usd_small = size(
-        dec!(5),
-        &SizingMode::Fixed,
-        None,
-        dec!(10),
-        dec!(0),
-        dec!(0),
-    );
-    let usd_large = size(
-        dec!(10000),
-        &SizingMode::Fixed,
-        None,
-        dec!(10),
-        dec!(0),
-        dec!(0),
-    );
+    let usd_small = size(dec!(5), &SizingMode::Fixed, None, dec!(10), dec!(0));
+    let usd_large = size(dec!(10000), &SizingMode::Fixed, None, dec!(10), dec!(0));
     assert_eq!(usd_small, usd_large);
 }
 
@@ -74,7 +50,6 @@ fn fixed_with_no_copy_size_pct_still_returns_max() {
         &SizingMode::Fixed,
         Some(dec!(0.10)),
         dec!(25),
-        dec!(0),
         dec!(0),
     );
     assert_eq!(usd, dec!(25));
@@ -91,7 +66,6 @@ fn self_pct_uses_fraction_of_balance() {
         Some(dec!(0.10)),
         dec!(50),
         dec!(0),
-        dec!(0),
     );
     assert_eq!(usd, dec!(20));
 }
@@ -104,7 +78,6 @@ fn self_pct_capped_at_max_trade_usd() {
         &SizingMode::SelfPct,
         Some(dec!(0.10)),
         dec!(50),
-        dec!(0),
         dec!(0),
     );
     assert_eq!(usd, dec!(50));
@@ -119,7 +92,6 @@ fn self_pct_floored_at_5_usd() {
         Some(dec!(0.10)),
         dec!(50),
         dec!(0),
-        dec!(0),
     );
     assert_eq!(usd, MIN_ORDER_USD);
 }
@@ -133,23 +105,14 @@ fn self_pct_at_exact_cap_boundary() {
         Some(dec!(0.50)),
         dec!(50),
         dec!(0),
-        dec!(0),
     );
     assert_eq!(usd, dec!(50));
 }
 
 #[test]
 fn self_pct_with_no_copy_size_pct_falls_back_to_max() {
-    // No pct provided -- should produce max_trade_usd (balance/balance = 1, clamped)
-    // Actual fallback: pct = max/balance = 10/200 = 0.05 => 200*0.05 = 10 = max
-    let usd = size(
-        dec!(200),
-        &SizingMode::SelfPct,
-        None,
-        dec!(10),
-        dec!(0),
-        dec!(0),
-    );
+    // No pct provided -- fallback: pct = max/balance = 10/200 = 0.05 => 200*0.05 = 10 = max
+    let usd = size(dec!(200), &SizingMode::SelfPct, None, dec!(10), dec!(0));
     assert_eq!(usd, dec!(10));
 }
 
@@ -158,166 +121,44 @@ fn self_pct_with_no_copy_size_pct_falls_back_to_max() {
 #[test]
 fn target_usd_mirrors_target_notional() {
     // Target bet 10 shares @ $0.80 = $8.00
-    let usd = size(
-        dec!(500),
-        &SizingMode::TargetUsd,
-        None,
-        dec!(50),
-        dec!(8),
-        dec!(0),
-    );
+    let usd = size(dec!(500), &SizingMode::TargetUsd, None, dec!(50), dec!(8));
     assert_eq!(usd, dec!(8));
 }
 
 #[test]
 fn target_usd_capped_at_max() {
     // Target bet $200, our cap is $50
-    let usd = size(
-        dec!(500),
-        &SizingMode::TargetUsd,
-        None,
-        dec!(50),
-        dec!(200),
-        dec!(0),
-    );
+    let usd = size(dec!(500), &SizingMode::TargetUsd, None, dec!(50), dec!(200));
     assert_eq!(usd, dec!(50));
 }
 
 #[test]
 fn target_usd_floored_at_clob_minimum() {
     // Target bet $1 -- below CLOB minimum, floor to $5
-    let usd = size(
-        dec!(500),
-        &SizingMode::TargetUsd,
-        None,
-        dec!(50),
-        dec!(1),
-        dec!(0),
-    );
+    let usd = size(dec!(500), &SizingMode::TargetUsd, None, dec!(50), dec!(1));
     assert_eq!(usd, MIN_ORDER_USD);
 }
 
 #[test]
 fn target_usd_exact_max_boundary() {
     // Target bet exactly $50 = cap
-    let usd = size(
-        dec!(500),
-        &SizingMode::TargetUsd,
-        None,
-        dec!(50),
-        dec!(50),
-        dec!(0),
-    );
+    let usd = size(dec!(500), &SizingMode::TargetUsd, None, dec!(50), dec!(50));
     assert_eq!(usd, dec!(50));
 }
 
 #[test]
 fn target_usd_ignores_our_balance() {
     // Our balance doesn't matter for TargetUsd
-    let small = size(
-        dec!(10),
-        &SizingMode::TargetUsd,
-        None,
-        dec!(50),
-        dec!(30),
-        dec!(0),
-    );
+    let small = size(dec!(10), &SizingMode::TargetUsd, None, dec!(50), dec!(30));
     let large = size(
         dec!(10000),
         &SizingMode::TargetUsd,
         None,
         dec!(50),
         dec!(30),
-        dec!(0),
     );
     assert_eq!(small, large);
     assert_eq!(small, dec!(30));
-}
-
-// -- SizingMode::TargetPct ----------------------------------------------------
-
-#[test]
-fn target_pct_scales_proportion_to_our_balance() {
-    // Target bet $10 / $1000 portfolio = 1% -> we have $200 -> 1% = $2 -> floor to $5
-    let usd = size(
-        dec!(200),
-        &SizingMode::TargetPct,
-        None,
-        dec!(50),
-        dec!(10),
-        dec!(1000),
-    );
-    assert_eq!(usd, MIN_ORDER_USD); // $2 floored to $5
-}
-
-#[test]
-fn target_pct_larger_proportion() {
-    // Target bet $100 / $1000 = 10% -> we have $500 -> 10% = $50 = cap
-    let usd = size(
-        dec!(500),
-        &SizingMode::TargetPct,
-        None,
-        dec!(50),
-        dec!(100),
-        dec!(1000),
-    );
-    assert_eq!(usd, dec!(50));
-}
-
-#[test]
-fn target_pct_medium_case() {
-    // Target bet $50 / $500 portfolio = 10% -> we have $300 -> 10% = $30
-    let usd = size(
-        dec!(300),
-        &SizingMode::TargetPct,
-        None,
-        dec!(50),
-        dec!(50),
-        dec!(500),
-    );
-    assert_eq!(usd, dec!(30));
-}
-
-#[test]
-fn target_pct_falls_back_to_fixed_when_portfolio_is_zero() {
-    // No scan data yet -- target_portfolio_usd = 0 -> graceful fallback to max_trade_usd
-    let usd = size(
-        dec!(200),
-        &SizingMode::TargetPct,
-        None,
-        dec!(10),
-        dec!(5),
-        dec!(0),
-    );
-    assert_eq!(usd, dec!(10));
-}
-
-#[test]
-fn target_pct_capped_at_max() {
-    // 50% of huge portfolio -> proportion > max -> cap
-    let usd = size(
-        dec!(500),
-        &SizingMode::TargetPct,
-        None,
-        dec!(50),
-        dec!(500),
-        dec!(1000),
-    );
-    assert_eq!(usd, dec!(50));
-}
-
-#[test]
-fn target_pct_very_small_portfolio_produces_large_proportion() {
-    // Target has tiny $10 portfolio, bet $9 = 90% -> we have $100 -> 90% = $90, but cap = $50
-    let usd = size(
-        dec!(100),
-        &SizingMode::TargetPct,
-        None,
-        dec!(50),
-        dec!(9),
-        dec!(10),
-    );
-    assert_eq!(usd, dec!(50));
 }
 
 // -- Floor/ceiling edge cases (mode-agnostic) ---------------------------------
@@ -326,14 +167,7 @@ fn target_pct_very_small_portfolio_produces_large_proportion() {
 fn max_less_than_min_clob_floor_uses_max_as_ceiling() {
     // Misconfigured: max_trade = $3, below $5 CLOB minimum
     // floor = min($5, $3) = $3; output is clamped to $3
-    let usd = size(
-        dec!(100),
-        &SizingMode::Fixed,
-        None,
-        dec!(3),
-        dec!(0),
-        dec!(0),
-    );
+    let usd = size(dec!(100), &SizingMode::Fixed, None, dec!(3), dec!(0));
     assert_eq!(usd, dec!(3));
 }
 
@@ -345,7 +179,6 @@ fn self_pct_misconfigured_max_uses_max_as_floor() {
         &SizingMode::SelfPct,
         Some(dec!(0.50)),
         dec!(5),
-        dec!(0),
         dec!(0),
     );
     assert_eq!(usd, dec!(5));

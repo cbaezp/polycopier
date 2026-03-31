@@ -161,17 +161,16 @@ impl Config {
                     "fixed     -- always use MAX_TRADE_SIZE_USD",
                     "self_pct  -- % of MY balance (set COPY_SIZE_PCT)",
                     "target_usd-- copy target's exact $ amount (capped at MAX_TRADE_SIZE_USD)",
-                    "target_pct-- scale target's portfolio % to my wallet (recommended)",
                 ];
                 let choice = Select::new("Position sizing mode:", options)
-                    .with_starting_cursor(3) // default: target_pct
+                    .with_starting_cursor(1) // default: self_pct
                     .prompt()
-                    .unwrap_or("fixed     -- always use MAX_TRADE_SIZE_USD");
+                    .unwrap_or("self_pct  -- % of MY balance (set COPY_SIZE_PCT)");
                 // Extract the keyword before the em-dash
                 choice
                     .split_whitespace()
                     .next()
-                    .unwrap_or("fixed")
+                    .unwrap_or("self_pct")
                     .to_string()
             }
         };
@@ -392,13 +391,12 @@ impl Config {
             "fixed     -- always use MAX_TRADE_SIZE_USD",
             "self_pct  -- % of MY balance (set COPY_SIZE_PCT)",
             "target_usd-- copy target's exact $ amount (capped at MAX_TRADE_SIZE_USD)",
-            "target_pct-- scale target's portfolio % to my wallet (recommended)",
         ];
         let cur_sizing = cur("SIZING_MODE");
         let starting = sizing_options
             .iter()
             .position(|o| o.starts_with(cur_sizing.trim()))
-            .unwrap_or(3);
+            .unwrap_or(1);
         let sizing_choice = Select::new("Position sizing mode:", sizing_options)
             .with_starting_cursor(starting)
             .prompt()

@@ -56,7 +56,6 @@ pub fn compute_order_usd(
     copy_size_pct: Option<Decimal>,
     max_trade_usd: Decimal,
     target_notional: Decimal,
-    target_portfolio_usd: Decimal,
 ) -> Decimal {
     let desired = match sizing_mode {
         SizingMode::Fixed => max_trade_usd,
@@ -66,15 +65,6 @@ pub fn compute_order_usd(
             our_balance * pct
         }
         SizingMode::TargetUsd => target_notional,
-        SizingMode::TargetPct => {
-            if target_portfolio_usd <= Decimal::ZERO {
-                // No portfolio data yet -- fall back gracefully to fixed size
-                max_trade_usd
-            } else {
-                let proportion = target_notional / target_portfolio_usd;
-                our_balance * proportion
-            }
-        }
     };
     // floor = min($5, max_cap) handles misconfigured max < min gracefully
     let floor = MIN_ORDER_USD.min(max_trade_usd);
@@ -235,9 +225,9 @@ pub fn start_strategy_engine(
                     })
                 } else {
                     // -- BUY: size according to active SizingMode, capped and $5 floored --
-                    let (current_balance, target_portfolio_usd) = {
+                    let current_balance = {
                         let guard = state.read().await;
-                        (guard.total_balance, guard.target_portfolio_usd)
+                        guard.total_balance
                     };
                     // target_notional = what the target just bet in dollar terms
                     let target_notional = event.size * event.price;
@@ -247,7 +237,6 @@ pub fn start_strategy_engine(
                         config.copy_size_pct,
                         config.max_trade_size_usd,
                         target_notional,
-                        target_portfolio_usd,
                     );
                     let raw_size = if target_notional > budget_usd {
                         budget_usd / event.price

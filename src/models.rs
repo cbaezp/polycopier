@@ -15,12 +15,6 @@ pub enum SizingMode {
     /// Mirror the target's exact dollar notional (`event.size * event.price`),
     /// capped at `MAX_TRADE_SIZE_USD`.
     TargetUsd,
-    /// Scale the target's portfolio proportion to our wallet:
-    /// `(target_notional / target_portfolio_est) * our_balance`,
-    /// floored at $5, capped at `MAX_TRADE_SIZE_USD`.
-    /// `target_portfolio_est` is approximated as sum((avg_price * size) of the target's
-    /// open positions, refreshed each scan cycle.
-    TargetPct,
 }
 
 impl SizingMode {
@@ -29,7 +23,6 @@ impl SizingMode {
             Self::Fixed => "fixed",
             Self::SelfPct => "self_pct",
             Self::TargetUsd => "target_usd",
-            Self::TargetPct => "target_pct",
         }
     }
 
@@ -37,7 +30,6 @@ impl SizingMode {
         match s.trim().to_lowercase().as_str() {
             "self_pct" => Self::SelfPct,
             "target_usd" => Self::TargetUsd,
-            "target_pct" => Self::TargetPct,
             _ => Self::Fixed,
         }
     }

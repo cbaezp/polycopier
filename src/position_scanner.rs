@@ -263,13 +263,7 @@ async fn scan_positions(
         }
     }
 
-    // Compute target_portfolio_usd = sum((avg_price * size) across all collected positions.
-    // This is the best approximation of the target's total invested capital we can make
-    // without historical account-balance snapshots.
-    let target_portfolio_usd: Decimal = all_positions.iter().map(|p| p.avg_price * p.size).sum();
-
-    // Pre-size the scan entries now that we have the full portfolio estimate.
-    // Replace the placeholder sizes in to_enter with budget-capped values.
+    // Pre-size the scan entries using the configured sizing mode.
     let sized_entries: Vec<(String, TradeEvent)> = to_enter
         .into_iter()
         .filter_map(|(token_id, mut ev)| {
@@ -286,7 +280,6 @@ async fn scan_positions(
                 config.copy_size_pct,
                 config.max_trade_size_usd,
                 target_notional,
-                target_portfolio_usd,
             );
             let size = (budget_usd / ev.price).min(ev.size).round_dp(2);
             if size > Decimal::ZERO {
@@ -307,11 +300,10 @@ async fn scan_positions(
         )
     });
 
-    // Batch-write all positions and portfolio estimate to state
+    // Batch-write all positions to state
     {
         let mut guard = state.write().await;
         guard.target_positions = all_positions;
-        guard.target_portfolio_usd = target_portfolio_usd;
         guard.last_scan_at = Some(std::time::Instant::now());
     }
 
