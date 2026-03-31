@@ -1,0 +1,21 @@
+# Build output
+/target
+
+# Environment files — never commit secrets
+.env
+.env.local
+.env.production
+
+# Runtime logs
+*.log
+bot.log
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Rust
+Cargo.lock

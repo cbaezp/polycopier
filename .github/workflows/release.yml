@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: polycopier
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Build matrix ─────────────────────────────────────────────────────────────
+  build:
+    name: Build — ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - os: macos-14          # Apple Silicon (M1/M2/M3)
+            target: aarch64-apple-darwin
+            artifact: polycopier-macos-arm64
+
+          - os: macos-13          # Intel Mac
+            target: x86_64-apple-darwin
+            artifact: polycopier-macos-x86_64
+
+          - os: ubuntu-latest     # Linux x86_64
+            target: x86_64-unknown-linux-gnu
+            artifact: polycopier-linux-x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary for upload
+        shell: bash
+        run: |
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} \
+             ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          retention-days: 1
+
+  # ── Create GitHub Release ────────────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # full history so commit notes span all commits
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Auto-generate release notes from commits since the last tag.
+          # GitHub groups them into categories based on .github/release.yml
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}  # e.g. v0.2.0-beta = pre-release
+          files: |
+            artifacts/polycopier-macos-arm64
+            artifacts/polycopier-macos-x86_64
+            artifacts/polycopier-linux-x86_64

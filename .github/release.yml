@@ -1,0 +1,30 @@
+changelog:
+  categories:
+    - title: New Features
+      labels:
+        - feature
+        - enhancement
+      exclude:
+        labels:
+          - ignore-for-release
+
+    - title: Bug Fixes
+      labels:
+        - bug
+        - fix
+
+    - title: Performance & Security
+      labels:
+        - performance
+        - security
+
+    - title: Documentation
+      labels:
+        - documentation
+        - docs
+
+    - title: Maintenance
+      labels:
+        - chore
+        - dependencies
+        - refactor
