@@ -84,8 +84,39 @@ pub async fn build_order_submitter(config: &Config) -> Result<(OrderSubmitter, B
 
             match clob.post_order(signed_order).await {
                 Ok(res) => {
-                    tracing::info!("Order accepted by CLOB. Response: {:?}", res);
-                    println!("      Order ID: {:?}", res);
+                    // The CLOB returns HTTP 200 even for rejected orders.
+                    // We must check res.success and res.error_msg explicitly.
+                    if !res.success {
+                        let msg = res.error_msg.as_deref().unwrap_or("(no message)");
+                        tracing::warn!(
+                            "Order rejected by CLOB: error_msg={:?}, status={:?}, \
+                             making_amount={}, taking_amount={}",
+                            msg,
+                            res.status,
+                            res.making_amount,
+                            res.taking_amount
+                        );
+                        bail!(
+                            "CLOB rejected order: {}",
+                            if msg.is_empty() {
+                                "unknown error (empty error_msg)"
+                            } else {
+                                msg
+                            }
+                        );
+                    }
+                    if let Some(msg) = &res.error_msg {
+                        if !msg.is_empty() {
+                            tracing::warn!("Order success=true but error_msg non-empty: {:?}", msg);
+                        }
+                    }
+                    tracing::info!(
+                        "Order accepted: id={}, status={:?}, making={}, taking={}",
+                        res.order_id,
+                        res.status,
+                        res.making_amount,
+                        res.taking_amount
+                    );
                     Ok(())
                 }
                 Err(e) => {
