@@ -16,6 +16,10 @@ pub struct BotState {
     /// Computed each scan cycle as sum((avg_price * size) across all target open positions.
     /// Used by `SizingMode::TargetPct` to compute proportional order sizes.
     pub target_portfolio_usd: Decimal,
+    /// Number of positions WE currently hold that the TARGET also holds.
+    /// Set by a dedicated background task that queries both wallets via the API
+    /// every 30 seconds -- never inferred from local scanner state.
+    pub copied_count: usize,
 }
 
 impl BotState {
@@ -31,6 +35,7 @@ impl BotState {
             copies_executed: 0,
             trades_skipped: 0,
             target_portfolio_usd: Decimal::ZERO,
+            copied_count: 0,
         }
     }
 

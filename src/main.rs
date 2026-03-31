@@ -93,6 +93,79 @@ async fn main() -> anyhow::Result<()> {
     // 9. Scan target wallets for pre-existing open positions (startup + adaptive interval)
     position_scanner::start_position_scanner(config.clone(), state.clone(), event_tx);
 
+    // 10. Dedicated "Copied" counter task.
+    //     Independently queries our wallet and each target wallet via the API,
+    //     computes the intersection of held token IDs, and writes to
+    //     state.copied_count every 30 seconds.
+    //     This is the authoritative source for the TUI "Copied" counter --
+    //     it never relies on local scanner state or session history.
+    {
+        use alloy::primitives::Address;
+        use polymarket_client_sdk::data::types::request::PositionsRequest;
+        use polymarket_client_sdk::data::Client as DataClient;
+        use std::collections::HashSet;
+        use std::str::FromStr;
+
+        let funder = config.funder_address.clone();
+        let targets = config.target_wallets.clone();
+        let state_cc = state.clone();
+
+        tokio::spawn(async move {
+            let client = DataClient::default();
+            loop {
+                // -- Fetch OUR positions ---------------------------------------
+                let our_tokens: HashSet<String> = if let Ok(addr) = Address::from_str(&funder) {
+                    let req = PositionsRequest::builder().user(addr).build();
+                    match client.positions(&req).await {
+                        Ok(ps) => ps.into_iter().map(|p| p.asset.to_string()).collect(),
+                        Err(e) => {
+                            tracing::warn!("copied_count: failed to fetch our positions: {}", e);
+                            HashSet::new()
+                        }
+                    }
+                } else {
+                    HashSet::new()
+                };
+
+                // -- Fetch TARGET positions and intersect ----------------------
+                let mut count = 0usize;
+                for wallet_str in &targets {
+                    let wallet_str = wallet_str.trim();
+                    if let Ok(addr) = Address::from_str(wallet_str) {
+                        let req = PositionsRequest::builder().user(addr).build();
+                        match client.positions(&req).await {
+                            Ok(ps) => {
+                                count += ps
+                                    .iter()
+                                    .filter(|p| our_tokens.contains(&p.asset.to_string()))
+                                    .count();
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "copied_count: failed to fetch target {}: {}",
+                                    wallet_str,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // -- Write to state -------------------------------------------
+                {
+                    let mut g = state_cc.write().await;
+                    g.copied_count = count;
+                }
+
+                tracing::debug!(
+                    "copied_count: {} position(s) mirrored from target(s)",
+                    count
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            }
+        });
+    }
+
     // 10. Poll live USDC balance every 10 seconds and update TUI
     {
         let state = state.clone();

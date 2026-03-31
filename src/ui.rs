@@ -114,11 +114,9 @@ pub async fn start_tui(
                 } else {
                     None
                 },
-                copied_count: g
-                    .target_positions
-                    .iter()
-                    .filter(|p| p.status == crate::models::ScanStatus::SkippedOwned)
-                    .count(),
+                // Authoritative count from the dedicated API task (main.rs).
+                // Queries our wallet and each target wallet every 30s.
+                copied_count: g.copied_count,
                 skips: g.trades_skipped,
                 logs,
             }
