@@ -49,6 +49,7 @@ The bot **never exits a position autonomously**. All exits are triggered only wh
 target wallet closes their position.
 
 The entire interface is a terminal UI (TUI) with no browser required.
+The bot can also run **headless** (no TUI) as a systemd daemon on a Linux server.
 
 ---
 
@@ -124,8 +125,10 @@ The entire interface is a terminal UI (TUI) with no browser required.
   can reach 60s when all positions are deeply in-the-money, but prices in the
   Copied table stay at most 20s stale via a dedicated background fetch.
 
-- **In-TUI settings** - press `[s]` to exit the TUI, run the interactive wizard,
-  save a new `.env`, and restart with the updated configuration.
+- **In-TUI settings editor** - press `[s]` to switch to a full-screen settings editor
+  without leaving the TUI. All current values are shown pre-filled in a table; use arrow
+  keys to navigate, `Enter` to edit a field, `[s]` to save the new `.env` and restart
+  the bot cleanly via `execv()`, or `[q]` to go back without saving.
 
 - **API-accurate Copied counter** - a dedicated background task queries your wallet
   and each target wallet directly via the API every 30 seconds and computes the
@@ -235,7 +238,115 @@ RUST_LOG=debug cargo run --release
 | Key | Action |
 |---|---|
 | `q` | Quit |
-| `s` | Open settings wizard (exits TUI, runs wizard, restarts bot) |
+| `s` | Open in-TUI settings editor (navigate with arrows, Enter to edit, `[s]` to save & restart, `[q]` to go back) |
+
+---
+
+## Server Deployment (24/7 headless mode)
+
+The bot ships with a `--headless` flag so it can run as a Linux daemon with
+no terminal required. All background tasks (listener, scanner, strategy engine,
+price refresh, balance poller, copied counter) run identically — it just skips
+the ratatui TUI.
+
+### Modes at a glance
+
+| Command | Mode | When to use |
+|---|---|---|
+| `polycopier` | Interactive TUI | Local monitoring, settings editing |
+| `polycopier --headless` | Headless daemon | Cloud server, 24/7 unattended |
+
+### Prerequisites
+
+- A Linux server with `systemd` (Ubuntu, Debian, etc.)
+- A `.env` file with all settings already configured
+
+> **Tip:** The easiest way to get a valid `.env` is to run the bot once locally
+> (`cargo run --release`), complete the setup wizard, then `scp` the resulting
+> `.env` to your server alongside the binary.
+
+### Quick start
+
+```bash
+# 1. Build a static Linux binary on your Mac (requires the musl target)
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+
+# 2. Copy binary + deploy files + your configured .env to the server
+scp target/x86_64-unknown-linux-musl/release/polycopier  user@server:/tmp/
+scp deploy/polycopier.service deploy/install.sh           user@server:/tmp/deploy/
+scp .env                                                   user@server:/tmp/
+
+# 3. On the server: install (creates system user, registers service)
+sudo /tmp/deploy/install.sh /tmp/polycopier
+
+# 4. Copy your pre-configured .env into place
+sudo cp /tmp/.env /opt/polycopier/.env
+sudo chown polycopier:polycopier /opt/polycopier/.env
+sudo chmod 600 /opt/polycopier/.env
+
+# 5. Start the daemon
+sudo systemctl start polycopier
+
+# 6. Tail live logs (INFO+ in headless mode)
+sudo journalctl -u polycopier -f
+```
+
+### Alternatively: first-time config on the server
+
+If you prefer to generate the `.env` directly on the server:
+
+```bash
+# Run once interactively to complete the wizard (writes /opt/polycopier/.env)
+sudo -u polycopier /opt/polycopier/polycopier
+# Ctrl-C after the wizard finishes, then:
+sudo systemctl start polycopier
+```
+
+### systemd management cheatsheet
+
+```bash
+sudo systemctl status polycopier           # check status
+sudo systemctl stop polycopier             # graceful stop (30s timeout)
+sudo systemctl restart polycopier          # restart
+sudo journalctl -u polycopier -f           # tail logs live
+sudo journalctl -u polycopier --since today  # today's logs only
+```
+
+### Updating the binary
+
+```bash
+# Build new binary locally
+cargo build --release --target x86_64-unknown-linux-musl
+
+# Deploy
+scp target/x86_64-unknown-linux-musl/release/polycopier user@server:/tmp/polycopier
+ssh user@server 'sudo systemctl stop polycopier && \
+  sudo cp /tmp/polycopier /opt/polycopier/polycopier && \
+  sudo systemctl start polycopier'
+```
+
+### Changing settings on the server
+
+**Option A** — Edit `.env` directly and restart:
+```bash
+sudo nano /opt/polycopier/.env
+sudo systemctl restart polycopier
+```
+
+**Option B** — Update locally via the TUI settings editor (`[s]`), then `scp`
+the updated `.env` to the server and `systemctl restart`.
+
+### Daemon characteristics
+
+| Feature | Detail |
+|---|---|
+| **Auto-restart on crash** | `Restart=on-failure`, 10 s delay |
+| **Auto-start on boot** | Enabled by `install.sh` |
+| **Graceful shutdown** | 30 s window on SIGTERM for in-flight orders |
+| **Logs** | `journalctl -u polycopier` (INFO+ from stdout) |
+| **Security** | Dedicated `polycopier` system user, `NoNewPrivileges`, `ProtectSystem=strict` |
+| **Settings write** | `/opt/polycopier` is `ReadWritePaths` so `.env` can be updated at runtime |
 
 ---
 
@@ -264,13 +375,19 @@ main.rs
   |                        target positions, live feed, TUI counters, refresh timestamps
   |
   +-- ui.rs               ratatui TUI: dashboard, live feed, Copied & Open positions,
-  |                        scanner (with live refresh timing), settings, system logs
+  |                        scanner (with live refresh timing), in-TUI settings editor,
+  |                        system logs
   |
   +-- log_capture.rs      TuiLogLayer: captures WARN+ to in-memory ring buffer
   |
   +-- models.rs           Core types: TradeEvent, EvaluatedTrade, TargetPosition
   |                        (including source_wallet), ScanStatus, SizingMode
   +-- utils.rs            Timestamp formatting helpers
+  |
+  +-- deploy/
+        polycopier.service  systemd unit (Restart=on-failure, journal logging,
+                            30s stop timeout, security hardening)
+        install.sh          One-shot installer (system user, binary, service enable)
 ```
 
 ### Data Flow
@@ -344,7 +461,7 @@ The scanner reschedules itself after each cycle based on the best available oppo
 # Run with live reloading (requires cargo-watch)
 cargo watch -x run
 
-# Run the full test suite (125 tests, all pure/unit - no network)
+# Run the full test suite (149 tests, all pure/unit - no network)
 cargo test --all
 
 # Lint
@@ -361,6 +478,7 @@ cargo fmt
 | `tests/integration.rs` | Strategy engine: intent classification, risk guards, SELL guards, slippage, deduplication |
 | `tests/sizing_tests.rs` | `compute_order_usd` for all four sizing modes + floor/cap guards |
 | `tests/copied_counter_tests.rs` | `count_intersection` pure function: empty, full, partial, no overlap, multi-target |
+| `src/ui.rs` (`settings_tests`) | In-TUI settings editor: field change detection, key navigation, edit lifecycle, `.env` output |
 
 The pre-commit hook runs fmt + clippy + tests automatically. To install it:
 
