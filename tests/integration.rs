@@ -5,7 +5,7 @@
 //! tests using a mock OrderSubmitter.
 
 use polycopier::models::{
-    EvaluatedTrade, OrderRequest, Position, ScanStatus, TradeEvent, TradeSide,
+    EvaluatedTrade, OrderRequest, Position, ScanStatus, TargetPosition, TradeEvent, TradeSide,
 };
 use polycopier::position_scanner::classify_position;
 use polycopier::risk::RiskEngine;
@@ -711,6 +711,20 @@ mod strategy_engine_tests {
         })
     }
 
+    /// Build a TargetPosition entry (what the scanner would have fetched).
+    fn target_pos(token_id: &str) -> TargetPosition {
+        TargetPosition {
+            title: "Test Market".to_string(),
+            outcome: "Yes".to_string(),
+            token_id: token_id.to_string(),
+            cur_price: dec!(0.50),
+            avg_price: dec!(0.45),
+            percent_pnl: dec!(0.10),
+            size: dec!(10),
+            status: ScanStatus::Monitoring,
+        }
+    }
+
     #[tokio::test]
     async fn valid_trade_from_target_wallet_is_executed() {
         let config = test_config();
@@ -804,7 +818,18 @@ mod strategy_engine_tests {
     #[tokio::test]
     async fn sell_trade_uses_lower_limit_price() {
         let config = test_config();
-        let state = Arc::new(RwLock::new(BotState::new()));
+        // Must pre-populate both our position AND the target's scanner position
+        let mut init_state = BotState::new();
+        init_state.positions.insert(
+            "99999".to_string(),
+            Position {
+                token_id: "99999".to_string(),
+                size: dec!(10),
+                average_entry_price: dec!(0.60),
+            },
+        );
+        init_state.target_positions.push(target_pos("99999"));
+        let state = Arc::new(RwLock::new(init_state));
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
@@ -901,11 +926,13 @@ mod strategy_engine_tests {
     }
 
     #[tokio::test]
-    async fn sell_with_no_position_falls_back_to_scaled_event_size() {
-        // No position in state: fallback = min(event.size, max_usd/price) * 0.97
-        // event: 100 shares * $0.50 = $50 > max_trade $10 → scaled = $10/$0.50 = 20 → * 0.97 = 19.40
-        let config = test_config(); // max_trade_size_usd = $10
-        let state = Arc::new(RwLock::new(BotState::new())); // no positions
+    async fn sell_skipped_when_we_never_entered_targets_long() {
+        // Scanner shows target HAS the position, but we never entered it → skip.
+        let config = test_config();
+        let mut init_state = BotState::new();
+        // Target holds "99999" but we don't
+        init_state.target_positions.push(target_pos("99999"));
+        let state = Arc::new(RwLock::new(init_state));
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
@@ -917,22 +944,95 @@ mod strategy_engine_tests {
             config.clone(),
         );
 
-        tx.send(make_trade_for_token(
-            "0xabc",
-            "unknown_token",
-            dec!(0.50),
-            dec!(100),
-            TradeSide::SELL,
-        ))
-        .await
-        .unwrap();
+        tx.send(make_trade("0xabc", dec!(0.50), dec!(100), TradeSide::SELL))
+            .await
+            .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
-        let orders = log.lock().unwrap();
-        assert_eq!(orders.len(), 1, "should fall back and still execute");
-        // scaled = $10/$0.50 = 20 → * 0.97 = 19.40
-        assert_eq!(orders[0].size, dec!(19.40));
-        assert_eq!(orders[0].side, TradeSide::SELL);
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "should NOT SELL a position we never entered"
+        );
+        let guard = state.read().await;
+        assert_eq!(guard.trades_skipped, 1);
+        assert_eq!(guard.copies_executed, 0);
+    }
+
+    #[tokio::test]
+    async fn sell_skipped_when_target_opening_short() {
+        // Target has NO prior scanner position → SELL = opening a short entry.
+        // We cannot replicate shorts, so skip.
+        let config = test_config();
+        let mut init_state = BotState::new();
+        // Seed a DIFFERENT token so scanner_ready = true
+        init_state.target_positions.push(target_pos("other_token"));
+        let state = Arc::new(RwLock::new(init_state));
+        let risk = RiskEngine::new(config.clone());
+        let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = mpsc::channel::<TradeEvent>(10);
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config.clone(),
+        );
+
+        // Target sells "99999" but has no prior long position → short entry
+        tx.send(make_trade("0xabc", dec!(0.60), dec!(10), TradeSide::SELL))
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "should skip short-entry SELL"
+        );
+        let guard = state.read().await;
+        assert_eq!(guard.trades_skipped, 1);
+        assert_eq!(guard.copies_executed, 0);
+    }
+
+    #[tokio::test]
+    async fn buy_skipped_when_target_closing_short_we_are_long() {
+        // We hold a long. Target has NO scanner position → target is likely
+        // closing a short. Copying this BUY would add to our long incorrectly.
+        let config = test_config();
+        let mut init_state = BotState::new();
+        init_state.positions.insert(
+            "99999".to_string(),
+            Position {
+                token_id: "99999".to_string(),
+                size: dec!(10),
+                average_entry_price: dec!(0.50),
+            },
+        );
+        // Scanner is ready (non-empty) but does NOT contain "99999"
+        init_state.target_positions.push(target_pos("other_token"));
+        let state = Arc::new(RwLock::new(init_state));
+        let risk = RiskEngine::new(config.clone());
+        let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = mpsc::channel::<TradeEvent>(10);
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config.clone(),
+        );
+
+        tx.send(make_trade("0xabc", dec!(0.50), dec!(10), TradeSide::BUY))
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "should skip BUY that looks like short close"
+        );
+        let guard = state.read().await;
+        assert_eq!(guard.trades_skipped, 1);
+        assert_eq!(guard.copies_executed, 0);
     }
 
     #[tokio::test]

@@ -87,7 +87,68 @@ pub fn start_strategy_engine(
                 }
             }
 
-            // Update TUI feed
+            // ── Intent classification using target's scanner positions ──────────
+            // The position scanner refreshes target_positions every 60 seconds.
+            // We use it to distinguish fresh entries from closures, and to detect
+            // short positions (SELL to open, BUY to close) that we cannot replicate.
+            if eval.validated {
+                let (target_holds, we_hold) = {
+                    let guard = state.read().await;
+                    let target = guard
+                        .target_positions
+                        .iter()
+                        .any(|p| p.token_id == event.token_id);
+                    let ours = guard.positions.contains_key(&event.token_id);
+                    (target, ours)
+                };
+
+                // Only apply intent classification when scanner has populated data.
+                // If target_positions is empty the scanner hasn't run yet — fall back
+                // to side-based logic (safe: SELLs still require us to hold the token).
+                let scanner_ready = {
+                    let guard = state.read().await;
+                    !guard.target_positions.is_empty()
+                };
+
+                let skip_reason: Option<&str> = if scanner_ready {
+                    match event.side {
+                        TradeSide::BUY => {
+                            if !target_holds && we_hold {
+                                // We're already long, target has no position →
+                                // target is likely closing a short we never entered.
+                                Some("BUY skipped: we hold long but target has no position (short close)")
+                            } else {
+                                None // Fresh long entry or adding to long → copy
+                            }
+                        }
+                        TradeSide::SELL => {
+                            if target_holds && we_hold {
+                                None // Target closing their long, we hold → copy
+                            } else if target_holds && !we_hold {
+                                Some("SELL skipped: target closing long we never entered")
+                            } else {
+                                // !target_holds → target opening a short (no prior long position)
+                                Some("SELL skipped: target opening short position (not supported)")
+                            }
+                        }
+                    }
+                } else {
+                    // Scanner not yet populated — fall back to: only skip SELLs we don't hold
+                    if event.side == TradeSide::SELL && !we_hold {
+                        Some("SELL skipped: position not held (scanner warming up)")
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(reason) = skip_reason {
+                    warn!("{}", reason);
+                    eval.validated = false;
+                    eval.reason = Some(reason.to_string());
+                }
+            }
+
+            // Update TUI feed (single push, correct validated state)
             {
                 let mut guard = state.write().await;
                 guard.push_evaluated_trade(eval.clone());
@@ -96,9 +157,9 @@ pub fn start_strategy_engine(
             if eval.validated {
                 info!("Trade Validated: {:?}", eval.original_event);
 
-                // Check Proportional Closure logic
                 let is_closing = event.side == TradeSide::SELL;
 
+                // Determine limit price with slippage
                 let limit_price = if event.side == TradeSide::BUY {
                     event.price + (event.price * config.max_slippage_pct)
                 } else {
@@ -106,9 +167,7 @@ pub fn start_strategy_engine(
                 };
 
                 let actual_size = if is_closing {
-                    // Look up OUR actual position size for this token.
-                    // We cannot use event.size (the target's sell amount) because the target
-                    // may hold 100× more than us — using their size would fail or oversell.
+                    // Position existence was already verified above — our_held_size > 0 guaranteed.
                     let fee_factor = Decimal::new(97, 2); // 0.97 — CLOB fee buffer for SELLs
                     let our_held_size = {
                         let guard = state.read().await;
@@ -118,21 +177,9 @@ pub fn start_strategy_engine(
                             .map(|p| p.size)
                             .unwrap_or(Decimal::ZERO)
                     };
-                    if our_held_size > Decimal::ZERO {
-                        // Sell everything we hold, minus the CLOB fee buffer
-                        (our_held_size * fee_factor).round_dp(2)
-                    } else {
-                        // No tracked position (e.g. scanner entry) — use target's size scaled
-                        // to our max budget, with fee buffer applied
-                        let scaled = if event.size * event.price > config.max_trade_size_usd {
-                            config.max_trade_size_usd / event.price
-                        } else {
-                            event.size
-                        };
-                        (scaled * fee_factor).round_dp(2)
-                    }
+                    (our_held_size * fee_factor).round_dp(2)
                 } else {
-                    // Buy Logic
+                    // BUY: cap to max_trade_size_usd
                     let size_cost = event.size * event.price;
                     if size_cost > config.max_trade_size_usd {
                         config.max_trade_size_usd / event.price
