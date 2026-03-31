@@ -42,3 +42,8 @@ impl BotState {
     }
 }
 
+impl Default for BotState {
+    fn default() -> Self {
+        Self::new()
+    }
+}

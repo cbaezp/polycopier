@@ -60,7 +60,7 @@ impl Config {
 
         let target_wallets_str = match env::var("TARGET_WALLETS").ok().filter(|v| {
             // Treat the value as a placeholder if ALL addresses in it look like templates
-            let all_placeholder = v.split(',').all(|w| is_placeholder(w));
+            let all_placeholder = v.split(',').all(is_placeholder);
             !all_placeholder && !v.trim().is_empty()
         }) {
             Some(v) => v,

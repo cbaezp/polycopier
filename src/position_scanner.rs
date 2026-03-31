@@ -20,6 +20,7 @@ const MAX_ENTRY_PRICE: &str = "0.95";
 
 /// Classify a target position into a ScanStatus.
 /// All parameters are plain values — no I/O, fully unit-testable.
+#[allow(clippy::too_many_arguments)]
 pub fn classify_position(
     token_id: &str,
     cur_price: Decimal,
@@ -133,26 +134,24 @@ async fn scan_positions(
                 pos.percent_pnl * Decimal::from(100)
             );
 
-            if status == ScanStatus::Monitoring {
-                if pos.cur_price > Decimal::ZERO {
-                    let size = (config.max_trade_size_usd / pos.cur_price)
-                        .min(pos.size)
-                        .round_dp(2);
+            if status == ScanStatus::Monitoring && pos.cur_price > Decimal::ZERO {
+                let size = (config.max_trade_size_usd / pos.cur_price)
+                    .min(pos.size)
+                    .round_dp(2);
 
-                    if size > Decimal::ZERO {
-                        let short_id = &token_id[..token_id.len().min(8)];
-                        let event = TradeEvent {
-                            transaction_hash: format!("scan_{}", short_id),
-                            maker_address: wallet_str.to_string(),
-                            taker_address: wallet_str.to_string(),
-                            token_id: token_id.clone(),
-                            price: pos.cur_price,
-                            size,
-                            side: TradeSide::BUY,
-                            timestamp: chrono::Utc::now().timestamp(),
-                        };
-                        to_enter.push((token_id.clone(), event));
-                    }
+                if size > Decimal::ZERO {
+                    let short_id = &token_id[..token_id.len().min(8)];
+                    let event = TradeEvent {
+                        transaction_hash: format!("scan_{}", short_id),
+                        maker_address: wallet_str.to_string(),
+                        taker_address: wallet_str.to_string(),
+                        token_id: token_id.clone(),
+                        price: pos.cur_price,
+                        size,
+                        side: TradeSide::BUY,
+                        timestamp: chrono::Utc::now().timestamp(),
+                    };
+                    to_enter.push((token_id.clone(), event));
                 }
             }
 

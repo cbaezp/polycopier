@@ -4,7 +4,7 @@
 //! pure functions extracted from each module, plus async strategy-engine
 //! tests using a mock OrderSubmitter.
 
-use polycopier::models::{EvaluatedTrade, OrderRequest, ScanStatus, TradeEvent, TradeSide};
+use polycopier::models::{EvaluatedTrade, OrderRequest, Position, ScanStatus, TradeEvent, TradeSide};
 use polycopier::position_scanner::classify_position;
 use polycopier::risk::RiskEngine;
 use polycopier::state::BotState;
@@ -29,11 +29,21 @@ fn test_config() -> polycopier::config::Config {
 }
 
 fn make_trade(taker: &str, price: Decimal, size: Decimal, side: TradeSide) -> TradeEvent {
+    make_trade_for_token(taker, "99999", price, size, side)
+}
+
+fn make_trade_for_token(
+    taker: &str,
+    token_id: &str,
+    price: Decimal,
+    size: Decimal,
+    side: TradeSide,
+) -> TradeEvent {
     TradeEvent {
         transaction_hash: "0xtest".to_string(),
         maker_address: taker.to_string(),
         taker_address: taker.to_string(),
-        token_id: "99999".to_string(),
+        token_id: token_id.to_string(),
         price,
         size,
         side,
@@ -231,6 +241,53 @@ mod state_tests {
         let state = BotState::new();
         assert!(state.target_positions.is_empty());
     }
+
+    // ── positions HashMap (new: SELL position lookup) ──────────────────────────
+
+    #[test]
+    fn position_can_be_inserted_and_retrieved() {
+        let mut state = BotState::new();
+        state.positions.insert(
+            "tok1".to_string(),
+            Position { token_id: "tok1".to_string(), size: dec!(20), average_entry_price: dec!(0.50) },
+        );
+        let pos = state.positions.get("tok1").expect("position should exist");
+        assert_eq!(pos.size, dec!(20));
+        assert_eq!(pos.average_entry_price, dec!(0.50));
+    }
+
+    #[test]
+    fn position_size_can_be_updated_in_place() {
+        let mut state = BotState::new();
+        state.positions.insert(
+            "tok2".to_string(),
+            Position { token_id: "tok2".to_string(), size: dec!(10), average_entry_price: dec!(0.60) },
+        );
+        state.positions.get_mut("tok2").unwrap().size = dec!(8);
+        assert_eq!(state.positions.get("tok2").unwrap().size, dec!(8));
+    }
+
+    #[test]
+    fn missing_token_returns_none() {
+        let state = BotState::new();
+        assert!(!state.positions.contains_key("does_not_exist"));
+    }
+
+    #[test]
+    fn multiple_positions_are_independent() {
+        let mut state = BotState::new();
+        state.positions.insert(
+            "tokA".to_string(),
+            Position { token_id: "tokA".to_string(), size: dec!(5), average_entry_price: dec!(0.20) },
+        );
+        state.positions.insert(
+            "tokB".to_string(),
+            Position { token_id: "tokB".to_string(), size: dec!(50), average_entry_price: dec!(0.75) },
+        );
+        assert_eq!(state.positions.get("tokA").unwrap().size, dec!(5));
+        assert_eq!(state.positions.get("tokB").unwrap().size, dec!(50));
+        assert_eq!(state.positions.len(), 2);
+    }
 }
 
 // ── Risk engine ───────────────────────────────────────────────────────────────
@@ -254,7 +311,7 @@ mod risk_tests {
         // 0.01 * $0.05 = $0.0005 — below $1 minimum
         let result = e.check_trade(&make_trade("0xabc", dec!(0.05), dec!(0.01), TradeSide::BUY));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_lowercase().contains("spoofing") || true);
+        assert!(result.unwrap_err().to_lowercase().contains("spoofing"));
     }
 
     #[test]
@@ -276,6 +333,21 @@ mod risk_tests {
         let mut e = engine();
         // Size-capping occurs in strategy.rs, not risk.rs
         assert!(e.check_trade(&make_trade("0xabc", dec!(0.80), dec!(1000), TradeSide::BUY)).is_ok());
+    }
+
+    #[test]
+    fn trade_just_above_1_usd_passes() {
+        let mut e = engine();
+        // 3 shares * $0.34 = $1.02 — just above the $1 threshold
+        assert!(e.check_trade(&make_trade("0xabc", dec!(0.34), dec!(3), TradeSide::BUY)).is_ok());
+    }
+
+    #[test]
+    fn trade_just_below_1_usd_is_rejected() {
+        let mut e = engine();
+        // 1.9 shares * $0.50 = $0.95 — just under $1
+        let result = e.check_trade(&make_trade("0xabc", dec!(0.50), dec!(1.9), TradeSide::BUY));
+        assert!(result.is_err());
     }
 }
 
@@ -337,6 +409,46 @@ mod strategy_tests {
             calculate_limit_price(dec!(0.90), TradeSide::BUY, dec!(0.02)),
             dec!(0.918)
         );
+    }
+
+    // ── BUY size minimum floor (new: smoke test $1 fix) ───────────────────────
+
+    #[test]
+    fn entry_size_targeting_1_10_stays_above_1_usd() {
+        // $1.10 target / $0.52 = 2.115 → rounds to 2.11, total = 2.11 * $0.52 = $1.0972 > $1 ✓
+        let size = calculate_entry_size(dec!(2.115), dec!(0.52), dec!(10));
+        let total = size * dec!(0.52);
+        assert!(total >= dec!(1.00), "total ${total} should be >= $1.00");
+    }
+
+    #[test]
+    fn entry_size_targeting_1_00_can_round_below_1_usd() {
+        // Demonstrates WHY $1.05/$1.10 target is needed:
+        // $1.00 / $0.52 = 1.923 → rounds to 1.92 → 1.92 * $0.52 = $0.9984 < $1
+        // This is the bug we fixed — now we target $1.10 in the smoke test.
+        let raw = dec!(1.00) / dec!(0.52);          // = 1.923...
+        let rounded = (raw * dec!(1)).round_dp(2);  // = 1.92
+        let total = rounded * dec!(0.52);           // = 0.9984
+        assert!(total < dec!(1.00), "demonstrates the rounding-below-$1 bug");
+    }
+
+    #[test]
+    fn sell_size_fee_buffer_97_pct() {
+        // Verifies that the 97% factor applied to SELL sizes gives the expected result
+        let held_size = dec!(20);
+        let fee_factor = Decimal::new(97, 2);
+        let sell_size = (held_size * fee_factor).round_dp(2);
+        assert_eq!(sell_size, dec!(19.40));
+    }
+
+    #[test]
+    fn sell_size_fee_buffer_never_exceeds_held() {
+        // 97% of held size is always < held size (can't oversell)
+        let held_sizes = [dec!(5), dec!(10), dec!(20.5), dec!(100)];
+        for held in &held_sizes {
+            let sell_size = (held * Decimal::new(97, 2)).round_dp(2);
+            assert!(sell_size < *held, "sell_size {sell_size} should be < held {held}");
+        }
     }
 }
 
@@ -552,6 +664,105 @@ mod strategy_engine_tests {
         assert_eq!(orders.len(), 1);
         assert_eq!(orders[0].price, dec!(0.588));
         assert_eq!(orders[0].side, TradeSide::SELL);
+    }
+
+    // ── SELL size: position lookup (new: proportional-close fix) ──────────────
+
+    #[tokio::test]
+    async fn sell_uses_our_held_size_not_target_size() {
+        // Target sells 500 shares; we hold only 20 → SELL should be 20 * 0.97 = 19.40
+        let config = test_config();
+        let mut init_state = BotState::new();
+        init_state.positions.insert(
+            "99999".to_string(),
+            Position { token_id: "99999".to_string(), size: dec!(20), average_entry_price: dec!(0.50) },
+        );
+        let state = Arc::new(RwLock::new(init_state));
+        let risk = RiskEngine::new(config.clone());
+        let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = mpsc::channel::<TradeEvent>(10);
+        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config.clone());
+
+        // Target sells 500 shares — we hold only 20
+        tx.send(make_trade("0xabc", dec!(0.60), dec!(500), TradeSide::SELL)).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let orders = log.lock().unwrap();
+        assert_eq!(orders.len(), 1, "expected exactly one SELL order");
+        assert_eq!(orders[0].size, dec!(19.40), "should be 20 * 0.97, not 500 * 0.97");
+        assert_eq!(orders[0].side, TradeSide::SELL);
+    }
+
+    #[tokio::test]
+    async fn sell_applies_97_pct_fee_buffer_to_our_position() {
+        // Held: 10 shares → SELL size should be 10 * 0.97 = 9.70
+        let config = test_config();
+        let mut init_state = BotState::new();
+        init_state.positions.insert(
+            "99999".to_string(),
+            Position { token_id: "99999".to_string(), size: dec!(10), average_entry_price: dec!(0.60) },
+        );
+        let state = Arc::new(RwLock::new(init_state));
+        let risk = RiskEngine::new(config.clone());
+        let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = mpsc::channel::<TradeEvent>(10);
+        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config.clone());
+
+        tx.send(make_trade("0xabc", dec!(0.60), dec!(10), TradeSide::SELL)).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let orders = log.lock().unwrap();
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].size, dec!(9.70));
+    }
+
+    #[tokio::test]
+    async fn sell_with_no_position_falls_back_to_scaled_event_size() {
+        // No position in state: fallback = min(event.size, max_usd/price) * 0.97
+        // event: 100 shares * $0.50 = $50 > max_trade $10 → scaled = $10/$0.50 = 20 → * 0.97 = 19.40
+        let config = test_config(); // max_trade_size_usd = $10
+        let state = Arc::new(RwLock::new(BotState::new())); // no positions
+        let risk = RiskEngine::new(config.clone());
+        let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = mpsc::channel::<TradeEvent>(10);
+        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config.clone());
+
+        tx.send(make_trade_for_token("0xabc", "unknown_token", dec!(0.50), dec!(100), TradeSide::SELL)).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let orders = log.lock().unwrap();
+        assert_eq!(orders.len(), 1, "should fall back and still execute");
+        // scaled = $10/$0.50 = 20 → * 0.97 = 19.40
+        assert_eq!(orders[0].size, dec!(19.40));
+        assert_eq!(orders[0].side, TradeSide::SELL);
+    }
+
+    #[tokio::test]
+    async fn sell_size_never_exceeds_held_position() {
+        // Even if the target trade is tiny, we sell exactly our full balance * 0.97
+        let config = test_config();
+        let mut init_state = BotState::new();
+        // We hold 15 shares; target only sells 3 (partial close signal)
+        init_state.positions.insert(
+            "99999".to_string(),
+            Position { token_id: "99999".to_string(), size: dec!(15), average_entry_price: dec!(0.50) },
+        );
+        let state = Arc::new(RwLock::new(init_state));
+        let risk = RiskEngine::new(config.clone());
+        let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = mpsc::channel::<TradeEvent>(10);
+        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
+
+        tx.send(make_trade("0xabc", dec!(0.60), dec!(3), TradeSide::SELL)).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let orders = log.lock().unwrap();
+        assert_eq!(orders.len(), 1);
+        // Should use OUR held size (15), not target's size (3)
+        // 15 * 0.97 = 14.55
+        assert_eq!(orders[0].size, dec!(14.55));
+        // Crucially, sell size must never exceed what we hold
+        assert!(orders[0].size < dec!(15), "sell size must be < held position");
     }
 }
 

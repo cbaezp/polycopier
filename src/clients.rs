@@ -76,7 +76,11 @@ pub async fn build_order_submitter(config: &Config) -> Result<(OrderSubmitter, B
 
             match clob.post_order(signed_order).await {
                 Ok(res) => {
-                    tracing::info!("Order Posted Successfully! Order ID: {:?}", res);
+                    tracing::info!(
+                        "Order accepted by CLOB. Response: {:?}",
+                        res
+                    );
+                    println!("      Order ID: {:?}", res);
                     Ok(())
                 }
                 Err(e) => {

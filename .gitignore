@@ -19,3 +19,6 @@ bot.log
 
 # Rust
 Cargo.lock
+
+
+src/bin/order_test.rs

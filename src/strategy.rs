@@ -100,9 +100,29 @@ pub fn start_strategy_engine(
                 };
 
                 let actual_size = if is_closing {
-                    // Proportional Closure Logic Placeholder
-                    // Ideally we fetch the Target's total balance. Here we just dump matching our target's output or max capacity.
-                    event.size
+                    // Look up OUR actual position size for this token.
+                    // We cannot use event.size (the target's sell amount) because the target
+                    // may hold 100× more than us — using their size would fail or oversell.
+                    let fee_factor = Decimal::new(97, 2); // 0.97 — CLOB fee buffer for SELLs
+                    let our_held_size = {
+                        let guard = state.read().await;
+                        guard.positions.get(&event.token_id)
+                            .map(|p| p.size)
+                            .unwrap_or(Decimal::ZERO)
+                    };
+                    if our_held_size > Decimal::ZERO {
+                        // Sell everything we hold, minus the CLOB fee buffer
+                        (our_held_size * fee_factor).round_dp(2)
+                    } else {
+                        // No tracked position (e.g. scanner entry) — use target's size scaled
+                        // to our max budget, with fee buffer applied
+                        let scaled = if event.size * event.price > config.max_trade_size_usd {
+                            config.max_trade_size_usd / event.price
+                        } else {
+                            event.size
+                        };
+                        (scaled * fee_factor).round_dp(2)
+                    }
                 } else {
                     // Buy Logic
                     let size_cost = event.size * event.price;

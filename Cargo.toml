@@ -2,6 +2,7 @@
 name = "polycopier"
 version = "0.1.0"
 edition = "2021"
+default-run = "polycopier"
 description = "A high-performance, terminal-based copy trading bot for Polymarket prediction markets."
 license = "MIT"
 repository = "https://github.com/cbaezp/polycopier"
