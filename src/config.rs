@@ -1,9 +1,28 @@
-use inquire::{Password, Text};
+use inquire::{Password, Select, Text};
 use rust_decimal::Decimal;
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::str::FromStr;
+
+/// How trade size is determined for BUY orders.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SizingMode {
+    /// Always spend exactly `max_trade_size_usd` (default, safest).
+    Fixed,
+    /// Spend a fixed percentage of OUR current balance per trade.
+    /// Floored at $5 (CLOB minimum), capped at `max_trade_size_usd`.
+    BalancePct(Decimal),
+    /// Mirror the TARGET's portfolio allocation percentage:
+    ///   ratio = target_trade_usd / target_portfolio_usd
+    ///   our_trade_usd = our_balance × ratio
+    /// Falls back to `Fixed` when target portfolio data is not yet available.
+    MirrorPct,
+    /// Copy the TARGET's exact dollar amount:
+    ///   our_trade_usd = target_trade_usd
+    /// Floored at MIN_ORDER_USD, capped at `max_trade_size_usd`.
+    MirrorAbsolute,
+}
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -14,16 +33,14 @@ pub struct Config {
     pub max_slippage_pct: Decimal,
     pub max_trade_size_usd: Decimal,
     pub max_delay_seconds: i64,
-    /// Skip copying a position if the target is already this % underwater (e.g. 0.40 = 40% down)
+    /// Skip copying a position if the target is already this % underwater (e.g. 0.20 = 20% down)
     pub max_copy_loss_pct: Decimal,
     /// Minimum token price for catch-up entries (default 0.02 — filters near-zero dust)
     pub min_entry_price: Decimal,
     /// Maximum token price for catch-up entries (default 0.999 — allows near-certainty positions)
     pub max_entry_price: Decimal,
-    /// If set, size each trade as this fraction of available balance (e.g. 0.10 = 10%).
-    /// Overrides max_trade_size_usd for sizing but that value still acts as a hard cap.
-    /// If None, always trade exactly max_trade_size_usd.
-    pub copy_size_pct: Option<Decimal>,
+    /// How to size BUY orders. See [`SizingMode`].
+    pub sizing_mode: SizingMode,
 }
 
 /// Returns true if a config value looks like a placeholder that hasn't been filled in.
@@ -139,32 +156,83 @@ impl Config {
             }
         };
 
-        // Price range and proportional sizing — read from env, no prompt (advanced settings)
+        // Price range — read from env, no wizard prompt (advanced filter, rarely changed)
         let min_entry_price_str =
             env::var("MIN_ENTRY_PRICE").unwrap_or_else(|_| "0.02".to_string());
         let max_entry_price_str =
             env::var("MAX_ENTRY_PRICE").unwrap_or_else(|_| "0.999".to_string());
 
-        // COPY_SIZE_PCT — prompted because it directly affects capital allocation
-        let copy_size_pct_str = match env::var("COPY_SIZE_PCT")
+        // ── Sizing mode ──────────────────────────────────────────────────────
+        // Three modes, mutually exclusive, stored in a single SIZING_MODE env var:
+        //   fixed        — always spend MAX_TRADE_SIZE_USD
+        //   balance_pct  — spend X% of OUR balance (follow-up: asks for %)
+        //   mirror       — mirror target's % allocation of THEIR portfolio
+        //
+        // COPY_SIZE_PCT is kept for backwards compatibility:
+        //   if SIZING_MODE is absent but COPY_SIZE_PCT is present, we infer balance_pct.
+        let (sizing_mode_str, balance_pct_str) = match env::var("SIZING_MODE")
             .ok()
             .filter(|v| !v.trim().is_empty())
         {
-            Some(v) => Some(v),
+            Some(mode) => {
+                // Already configured — read companion BALANCE_PCT if needed
+                let pct = env::var("BALANCE_PCT")
+                    .or_else(|_| env::var("COPY_SIZE_PCT")) // backwards compat
+                    .unwrap_or_else(|_| "0.10".to_string());
+                (mode, pct)
+            }
             None => {
-                write_new_env = true;
-                let input = Text::new(
-                    "Proportional trade size as % of balance (e.g. 0.10 = 10%). Leave blank to use MAX_TRADE_SIZE_USD only:",
-                )
-                .with_default("0.10")
-                .prompt()
-                .unwrap_or_default();
-                let trimmed = input.trim().to_string();
-                if trimmed.is_empty() || trimmed == "0" {
-                    None
-                } else {
-                    Some(trimmed)
+                // Back-compat: if old COPY_SIZE_PCT is set, use balance_pct silently
+                if let Ok(pct) = env::var("COPY_SIZE_PCT") {
+                    if !pct.trim().is_empty() && pct.trim() != "0" {
+                        return Self::build(
+                            private_key,
+                            funder_address,
+                            target_wallets_str,
+                            max_slippage_str,
+                            max_trade_size_str,
+                            max_delay_str,
+                            max_copy_loss_str,
+                            min_entry_price_str,
+                            max_entry_price_str,
+                            "balance_pct".to_string(),
+                            pct,
+                        );
+                    }
                 }
+
+                // Fresh setup — ask wizard
+                write_new_env = true;
+                let options = vec![
+                    "mirror_pct — Mirror target's % of their portfolio, scaled to MY balance (recommended)",
+                    "mirror_amt — Copy target's exact dollar amount (or platform minimum)",
+                    "balance    — Fixed % of MY balance per trade (ignores target's sizing)",
+                    "fixed      — Always spend MAX_TRADE_SIZE_USD exactly",
+                ];
+                let choice = Select::new("Trade sizing strategy:", options)
+                    .prompt()
+                    .unwrap_or("fixed      — Always spend MAX_TRADE_SIZE_USD exactly");
+
+                let mode = if choice.starts_with("mirror_pct") {
+                    "mirror_pct".to_string()
+                } else if choice.starts_with("mirror_amt") {
+                    "mirror_amt".to_string()
+                } else if choice.starts_with("balance") {
+                    "balance_pct".to_string()
+                } else {
+                    "fixed".to_string()
+                };
+
+                let pct = if mode == "balance_pct" {
+                    Text::new("% of MY balance to use per trade (e.g. 0.10 = 10%):")
+                        .with_default("0.10")
+                        .prompt()
+                        .unwrap_or_else(|_| "0.10".to_string())
+                } else {
+                    "0.10".to_string() // default, stored but unused in other modes
+                };
+
+                (mode, pct)
             }
         };
 
@@ -185,11 +253,39 @@ impl Config {
             writeln!(file, "MAX_COPY_LOSS_PCT=\"{}\"", max_copy_loss_str)?;
             writeln!(file, "MIN_ENTRY_PRICE=\"{}\"", min_entry_price_str)?;
             writeln!(file, "MAX_ENTRY_PRICE=\"{}\"", max_entry_price_str)?;
-            if let Some(ref pct) = copy_size_pct_str {
-                writeln!(file, "COPY_SIZE_PCT=\"{}\"", pct)?;
-            };
+            writeln!(file, "SIZING_MODE=\"{}\"", sizing_mode_str)?;
+            writeln!(file, "BALANCE_PCT=\"{}\"", balance_pct_str)?;
         }
 
+        Self::build(
+            private_key,
+            funder_address,
+            target_wallets_str,
+            max_slippage_str,
+            max_trade_size_str,
+            max_delay_str,
+            max_copy_loss_str,
+            min_entry_price_str,
+            max_entry_price_str,
+            sizing_mode_str,
+            balance_pct_str,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        private_key: String,
+        funder_address: String,
+        target_wallets_str: String,
+        max_slippage_str: String,
+        max_trade_size_str: String,
+        max_delay_str: String,
+        max_copy_loss_str: String,
+        min_entry_price_str: String,
+        max_entry_price_str: String,
+        sizing_mode_str: String,
+        balance_pct_str: String,
+    ) -> anyhow::Result<Self> {
         let target_wallets: Vec<String> = target_wallets_str
             .split(',')
             .map(|s| s.trim().to_string())
@@ -202,13 +298,13 @@ impl Config {
 
         let max_trade_size_usd = max_trade_size_str
             .parse::<Decimal>()
-            .unwrap_or_else(|_| Decimal::from_str("10.00").unwrap());
+            .unwrap_or_else(|_| Decimal::from_str("50.00").unwrap());
 
-        let max_delay_seconds = max_delay_str.parse::<i64>().unwrap_or(2);
+        let max_delay_seconds = max_delay_str.parse::<i64>().unwrap_or(10);
 
         let max_copy_loss_pct = max_copy_loss_str
             .parse::<Decimal>()
-            .unwrap_or_else(|_| Decimal::from_str("0.40").unwrap());
+            .unwrap_or_else(|_| Decimal::from_str("0.20").unwrap());
 
         let min_entry_price = min_entry_price_str
             .parse::<Decimal>()
@@ -218,10 +314,22 @@ impl Config {
             .parse::<Decimal>()
             .unwrap_or_else(|_| Decimal::from_str("0.999").unwrap());
 
-        let copy_size_pct = copy_size_pct_str
-            .as_deref()
-            .and_then(|s| s.parse::<Decimal>().ok())
-            .filter(|&p| p > Decimal::ZERO && p <= Decimal::ONE);
+        let sizing_mode = match sizing_mode_str.trim() {
+            "mirror_pct" | "mirror" => SizingMode::MirrorPct, // "mirror" = backwards compat
+            "mirror_amt" => SizingMode::MirrorAbsolute,
+            "balance_pct" => {
+                let pct = balance_pct_str
+                    .parse::<Decimal>()
+                    .unwrap_or_else(|_| Decimal::from_str("0.10").unwrap());
+                let pct = pct.max(Decimal::ZERO).min(Decimal::ONE);
+                if pct > Decimal::ZERO {
+                    SizingMode::BalancePct(pct)
+                } else {
+                    SizingMode::Fixed
+                }
+            }
+            _ => SizingMode::Fixed,
+        };
 
         Ok(Self {
             private_key,
@@ -234,7 +342,7 @@ impl Config {
             max_copy_loss_pct,
             min_entry_price,
             max_entry_price,
-            copy_size_pct,
+            sizing_mode,
         })
     }
 }

@@ -1,5 +1,5 @@
 use crate::clients::OrderSubmitter;
-use crate::config::Config;
+use crate::config::{Config, SizingMode};
 use crate::models::{EvaluatedTrade, OrderRequest, TradeEvent, TradeSide};
 use crate::risk::RiskEngine;
 use crate::state::BotState;
@@ -36,27 +36,77 @@ pub fn calculate_entry_size(size: Decimal, price: Decimal, max_trade_usd: Decima
 /// Minimum notional the CLOB requires (5 shares × ~$1.00 = $5.00).
 pub const MIN_ORDER_USD: Decimal = Decimal::from_parts(5, 0, 0, false, 0); // 5.00
 
-/// Determine how many USD to spend on a BUY order given:
-/// - `balance`         — current wallet balance in USDC
-/// - `copy_size_pct`   — optional fraction of balance to use (e.g. Some(dec!(0.10)) = 10%)
-/// - `max_trade_usd`   — hard cap; trade is never larger than this regardless of pct
+/// Determine how many USD to spend on a BUY order — BalancePct and Fixed modes.
+/// For MirrorTarget, use `compute_mirror_order_usd` instead.
 ///
-/// Rules (in priority order):
-/// 1. If `copy_size_pct` is Some, desired = balance × pct; otherwise desired = max_trade_usd.
-/// 2. Floor at MIN_ORDER_USD ($5.00) — the CLOB rejects smaller lots.
-/// 3. Ceiling at max_trade_usd — single trade can never exceed the configured cap.
+/// Rules:
+/// 1. `BalancePct(p)` → desired = balance × p
+/// 2. `Fixed` (or MirrorTarget fallback) → desired = max_trade_usd
+/// 3. Floored at MIN_ORDER_USD ($5), capped at max_trade_usd.
 pub fn compute_order_usd(
     balance: Decimal,
-    copy_size_pct: Option<Decimal>,
+    copy_size_pct: Option<Decimal>, // kept for unit-test compatibility
     max_trade_usd: Decimal,
 ) -> Decimal {
     let desired = match copy_size_pct {
         Some(pct) => balance * pct,
         None => max_trade_usd,
     };
-    // Enforce floor/ceiling, handling the edge case where max < min (misconfiguration)
     let floor = MIN_ORDER_USD.min(max_trade_usd);
     desired.max(floor).min(max_trade_usd)
+}
+
+/// Mirror the target's portfolio allocation.
+///
+/// Formula: `ratio = target_trade_usd / target_portfolio_usd`
+/// then: `our_trade_usd = our_balance × ratio`
+///
+/// Falls back to `max_trade_usd` (fixed mode) when `target_portfolio_usd` is zero
+/// (scanner hasn't populated target positions yet).
+/// Result is clamped to `[MIN_ORDER_USD, max_trade_usd]`.
+pub fn compute_mirror_order_usd(
+    our_balance: Decimal,
+    target_trade_usd: Decimal, // event.size × event.price for live trades
+    target_portfolio_usd: Decimal, // BotState::target_portfolio_usd()
+    max_trade_usd: Decimal,
+) -> Decimal {
+    if target_portfolio_usd <= Decimal::ZERO {
+        // Target data not yet available — fall back to fixed sizing
+        let floor = MIN_ORDER_USD.min(max_trade_usd);
+        return max_trade_usd.max(floor).min(max_trade_usd);
+    }
+    let ratio = target_trade_usd / target_portfolio_usd;
+    let desired = our_balance * ratio;
+    let floor = MIN_ORDER_USD.min(max_trade_usd);
+    desired.max(floor).min(max_trade_usd)
+}
+
+/// Resolve how much USD to spend for a BUY, dispatching on the configured SizingMode.
+///
+/// `target_trade_usd`      = event.size × event.price (the target's notional)
+/// `target_portfolio_usd`  = BotState::target_portfolio_usd() (scanner-cached)
+pub fn resolve_budget_usd(
+    sizing_mode: &SizingMode,
+    our_balance: Decimal,
+    target_trade_usd: Decimal,
+    target_portfolio_usd: Decimal,
+    max_trade_usd: Decimal,
+) -> Decimal {
+    let floor = MIN_ORDER_USD.min(max_trade_usd);
+    match sizing_mode {
+        SizingMode::Fixed => max_trade_usd.max(floor).min(max_trade_usd),
+        SizingMode::BalancePct(pct) => compute_order_usd(our_balance, Some(*pct), max_trade_usd),
+        SizingMode::MirrorPct => compute_mirror_order_usd(
+            our_balance,
+            target_trade_usd,
+            target_portfolio_usd,
+            max_trade_usd,
+        ),
+        SizingMode::MirrorAbsolute => {
+            // Copy the target's exact notional, clamped to [MIN_ORDER_USD, max_trade_usd].
+            target_trade_usd.max(floor).min(max_trade_usd)
+        }
+    }
 }
 
 pub fn start_strategy_engine(
@@ -212,14 +262,17 @@ pub fn start_strategy_engine(
                         side: event.side,
                     })
                 } else {
-                    // ── BUY: proportional or fixed sizing, capped and $5 floored ──
-                    let current_balance = {
+                    // ── BUY: sizing dispatched on SizingMode ──
+                    let (current_balance, target_portfolio_usd) = {
                         let guard = state.read().await;
-                        guard.total_balance
+                        (guard.total_balance, guard.target_portfolio_usd())
                     };
-                    let budget_usd = compute_order_usd(
+                    let target_trade_usd = event.size * event.price;
+                    let budget_usd = resolve_budget_usd(
+                        &config.sizing_mode,
                         current_balance,
-                        config.copy_size_pct,
+                        target_trade_usd,
+                        target_portfolio_usd,
                         config.max_trade_size_usd,
                     );
                     let size_cost = event.size * event.price;
@@ -354,6 +407,97 @@ mod tests {
     fn pct_exactly_at_max_returns_max() {
         // 50% of $100 = $50 = cap exactly
         let usd = compute_order_usd(dec!(100), Some(dec!(0.50)), dec!(50));
+        assert_eq!(usd, dec!(50));
+    }
+
+    // ── compute_mirror_order_usd tests ─────────────────────────────────────────
+
+    #[test]
+    fn mirror_normal_case() {
+        // Target portfolio: $1000. Target trade: $100 (10%).
+        // Our balance: $500. Expected: $500 × 10% = $50.
+        let usd = compute_mirror_order_usd(dec!(500), dec!(100), dec!(1000), dec!(200));
+        assert_eq!(usd, dec!(50));
+    }
+
+    #[test]
+    fn mirror_falls_back_to_fixed_when_portfolio_is_zero() {
+        // No scanner data yet — should return max_trade_usd.
+        let usd = compute_mirror_order_usd(dec!(500), dec!(100), dec!(0), dec!(25));
+        assert_eq!(usd, dec!(25));
+    }
+
+    #[test]
+    fn mirror_floored_at_min_order_usd() {
+        // Target portfolio: $10000. Target trade: $10 (0.1%).
+        // Our balance: $50. Expected desired = $50 × 0.001 = $0.05 → floored to $5.
+        let usd = compute_mirror_order_usd(dec!(50), dec!(10), dec!(10000), dec!(50));
+        assert_eq!(usd, dec!(5));
+    }
+
+    #[test]
+    fn mirror_capped_at_max_trade_usd() {
+        // Target portfolio: $1000. Target trade: $900 (90%).
+        // Our balance: $500. Desired = $450. Cap = $50.
+        let usd = compute_mirror_order_usd(dec!(500), dec!(900), dec!(1000), dec!(50));
+        assert_eq!(usd, dec!(50));
+    }
+
+    #[test]
+    fn mirror_small_ratio_floored() {
+        // Target commits 0.5% of her $200k portfolio = $1000 per trade.
+        // We have $30. Desired = $30 × 0.005 = $0.15 → floored to $5.
+        let usd = compute_mirror_order_usd(dec!(30), dec!(1000), dec!(200000), dec!(50));
+        assert_eq!(usd, dec!(5));
+    }
+
+    #[test]
+    fn mirror_exact_parity() {
+        // Same portfolio value — same absolute trade size → ratio 1:1 but capped.
+        // Target portfolio: $100, trade: $10 (10%). Our balance: $100.
+        // Desired = $100 × 10% = $10. Cap $50 → $10.
+        let usd = compute_mirror_order_usd(dec!(100), dec!(10), dec!(100), dec!(50));
+        assert_eq!(usd, dec!(10));
+    }
+
+    // ── MirrorAbsolute (via resolve_budget_usd) ────────────────────────────────
+
+    #[test]
+    fn mirror_absolute_copies_exact_target_amount() {
+        // Target bet $18 → we bet $18 (within cap of $50).
+        let usd = resolve_budget_usd(
+            &SizingMode::MirrorAbsolute,
+            dec!(500),  // our balance (ignored for absolute)
+            dec!(18),   // target_trade_usd
+            dec!(2000), // target_portfolio_usd (ignored for absolute)
+            dec!(50),
+        );
+        assert_eq!(usd, dec!(18));
+    }
+
+    #[test]
+    fn mirror_absolute_floored_when_target_bet_tiny() {
+        // Target bet $1 (below CLOB minimum) → floored to $5.
+        let usd = resolve_budget_usd(
+            &SizingMode::MirrorAbsolute,
+            dec!(500),
+            dec!(1),
+            dec!(2000),
+            dec!(50),
+        );
+        assert_eq!(usd, dec!(5));
+    }
+
+    #[test]
+    fn mirror_absolute_capped_when_target_bet_large() {
+        // Target bet $200 but our cap is $50 → capped to $50.
+        let usd = resolve_budget_usd(
+            &SizingMode::MirrorAbsolute,
+            dec!(500),
+            dec!(200),
+            dec!(2000),
+            dec!(50),
+        );
         assert_eq!(usd, dec!(50));
     }
 }

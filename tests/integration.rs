@@ -4,6 +4,7 @@
 //! pure functions extracted from each module, plus async strategy-engine
 //! tests using a mock OrderSubmitter.
 
+use polycopier::config::SizingMode;
 use polycopier::models::{
     EvaluatedTrade, OrderRequest, Position, ScanStatus, TargetPosition, TradeEvent, TradeSide,
 };
@@ -29,7 +30,7 @@ fn test_config() -> polycopier::config::Config {
         max_copy_loss_pct: dec!(0.40),
         min_entry_price: dec!(0.02),
         max_entry_price: dec!(0.999),
-        copy_size_pct: None,
+        sizing_mode: SizingMode::Fixed,
     }
 }
 

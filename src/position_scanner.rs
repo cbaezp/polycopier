@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::models::{ScanStatus, TargetPosition, TradeEvent, TradeSide};
 use crate::state::BotState;
-use crate::strategy::compute_order_usd;
+use crate::strategy::resolve_budget_usd;
 use alloy::primitives::Address;
 use anyhow::Result;
 use polymarket_client_sdk::data::types::request::PositionsRequest;
@@ -153,11 +153,12 @@ async fn scan_positions(
     let max_price = config.max_entry_price;
 
     // Brief read lock to snapshot our current holdings
-    let (our_token_ids, current_balance) = {
+    let (our_token_ids, current_balance, target_portfolio_usd) = {
         let guard = state.read().await;
         let ids = guard.positions.keys().cloned().collect();
         let bal = guard.total_balance;
-        (ids, bal)
+        let ptf = guard.target_portfolio_usd();
+        (ids, bal, ptf)
     };
     let our_token_ids: HashSet<String> = our_token_ids;
 
@@ -212,9 +213,13 @@ async fn scan_positions(
             );
 
             if status == ScanStatus::Monitoring && pos.cur_price > Decimal::ZERO {
-                let budget_usd = compute_order_usd(
+                // For MirrorTarget: position's current value = target's "trade USD" for this market
+                let position_value = pos.size * pos.cur_price;
+                let budget_usd = resolve_budget_usd(
+                    &config.sizing_mode,
                     current_balance,
-                    config.copy_size_pct,
+                    position_value,
+                    target_portfolio_usd,
                     config.max_trade_size_usd,
                 );
                 let size = (budget_usd / pos.cur_price).min(pos.size).round_dp(2);

@@ -40,6 +40,16 @@ impl BotState {
         }
         self.live_feed.push_front(trade);
     }
+
+    /// Sum of (size × cur_price) across all cached target positions.
+    /// Used by MirrorTarget sizing to compute the target's total deployed portfolio value.
+    /// Returns Decimal::ZERO if no target positions have been loaded yet.
+    pub fn target_portfolio_usd(&self) -> Decimal {
+        self.target_positions
+            .iter()
+            .map(|p| p.size * p.cur_price)
+            .fold(Decimal::ZERO, |acc, v| acc + v)
+    }
 }
 
 impl Default for BotState {
