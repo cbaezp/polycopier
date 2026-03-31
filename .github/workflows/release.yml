@@ -2,8 +2,10 @@ name: Release
 
 on:
   push:
+    branches:
+      - main   # auto-release on every merge to main
     tags:
-      - "v*"
+      - "v*"   # also fires if someone pushes a manual tag
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,9 +15,54 @@ permissions:
   contents: write
 
 jobs:
-  # ── Build matrix ─────────────────────────────────────────────────────────────
+  # ── Derive version ─────────────────────────────────────────────────────────
+  version:
+    name: Derive version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # If the trigger was a manual tag push, use that tag as-is.
+      # If the trigger was a merge to main, auto-bump the patch component of
+      # the latest semver tag (or start at v0.1.0 if none exists yet).
+      - name: Compute release tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            LATEST=$(git tag --list 'v*' --sort=-version:refname | head -1)
+            if [[ -z "$LATEST" ]]; then
+              TAG="v0.1.0"
+            else
+              # Bump patch: v1.2.3 → v1.2.4
+              IFS='.' read -r major minor patch <<< "${LATEST#v}"
+              TAG="v${major}.${minor}.$((patch + 1))"
+            fi
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing as $TAG"
+
+      - name: Create annotated tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Auto-release $TAG from main"
+          git push origin "$TAG"
+
+  # ── Build matrix ────────────────────────────────────────────────────────────
   build:
     name: Build — ${{ matrix.target }}
+    needs: version
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -68,17 +115,17 @@ jobs:
           path: ${{ matrix.artifact }}
           retention-days: 1
 
-  # ── Create GitHub Release ────────────────────────────────────────────────────
+  # ── Create GitHub Release ───────────────────────────────────────────────────
   release:
     name: Create Release
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0      # full history so commit notes span all commits
+          fetch-depth: 0
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -89,10 +136,10 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.version.outputs.tag }}
           # Auto-generate release notes from commits since the last tag.
-          # GitHub groups them into categories based on .github/release.yml
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}  # e.g. v0.2.0-beta = pre-release
+          prerelease: ${{ contains(needs.version.outputs.tag, '-') }}
           files: |
             artifacts/polycopier-macos-arm64
             artifacts/polycopier-macos-x86_64
