@@ -144,8 +144,29 @@ impl Config {
             env::var("MIN_ENTRY_PRICE").unwrap_or_else(|_| "0.02".to_string());
         let max_entry_price_str =
             env::var("MAX_ENTRY_PRICE").unwrap_or_else(|_| "0.999".to_string());
-        // COPY_SIZE_PCT is optional — if absent, fixed MAX_TRADE_SIZE_USD is used instead
-        let copy_size_pct_str = env::var("COPY_SIZE_PCT").ok();
+
+        // COPY_SIZE_PCT — prompted because it directly affects capital allocation
+        let copy_size_pct_str = match env::var("COPY_SIZE_PCT")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+        {
+            Some(v) => Some(v),
+            None => {
+                write_new_env = true;
+                let input = Text::new(
+                    "Proportional trade size as % of balance (e.g. 0.10 = 10%). Leave blank to use MAX_TRADE_SIZE_USD only:",
+                )
+                .with_default("0.10")
+                .prompt()
+                .unwrap_or_default();
+                let trimmed = input.trim().to_string();
+                if trimmed.is_empty() || trimmed == "0" {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            }
+        };
 
         if write_new_env {
             println!("Saving credentials to .env...");

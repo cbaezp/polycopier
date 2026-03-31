@@ -71,8 +71,9 @@ The entire interface is a terminal UI (TUI) with no browser required.
   - SELL quantities are based on **our own held size**, not the target's order size.
   - SELL is never submitted for a token we don't hold.
 
-- **BUY floor** — entry size targets a minimum of $1.10 notional to prevent rounding errors
-  from dropping below the CLOB's $1.00 minimum order size.
+- **Proportional position sizing** (`COPY_SIZE_PCT`) — sizes each trade as a percentage of
+  your current balance (e.g. `0.10` = 10%), clamped between the CLOB's $5 minimum lot and
+  `MAX_TRADE_SIZE_USD` as a hard cap. Auto-scales as your wallet grows without any config change.
 
 - **Interactive setup wizard** — prompts for all credentials on first run and saves to `.env`.
 
@@ -130,17 +131,18 @@ cargo run --release
 
 ### Environment Variables
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `PRIVATE_KEY` | Yes | — | Hex private key for the signing wallet (`0x…` or plain hex) |
-| `FUNDER_ADDRESS` | Yes | — | Proxy/Safe wallet address that holds USDC (shown on your Polymarket profile) |
-| `TARGET_WALLETS` | Yes | — | Comma-separated list of target proxy wallet addresses to copy |
-| `MAX_SLIPPAGE_PCT` | No | `0.02` | Maximum allowed price deviation from the copied trade (2% = `0.02`) |
-| `MAX_TRADE_SIZE_USD` | No | `10.00` | Maximum USDC to spend per copied trade |
-| `MAX_DELAY_SECONDS` | No | `10` | Discard live trade events (listener) older than this many seconds |
-| `MAX_COPY_LOSS_PCT` | No | `0.40` | Skip catch-up entries where the target is already this far underwater (40% = `0.40`) |
-| `MIN_ENTRY_PRICE` | No | `0.02` | Minimum token price accepted for catch-up entries (filters near-zero dust) |
-| `MAX_ENTRY_PRICE` | No | `0.998` | Maximum token price accepted for catch-up entries. Raise above `0.95` when copying targets who trade high-confidence NO positions (e.g. `0.998`) |
+| Variable | Required | Default | Wizard | Description |
+|---|---|---|---|---|
+| `PRIVATE_KEY` | Yes | — | ✅ | Hex private key for the signing wallet (`0x…` or plain hex) |
+| `FUNDER_ADDRESS` | Yes | — | ✅ | Proxy/Safe wallet address that holds USDC (shown on your Polymarket profile) |
+| `TARGET_WALLETS` | Yes | — | ✅ | Comma-separated list of target proxy wallet addresses to copy |
+| `MAX_SLIPPAGE_PCT` | No | `0.02` | ✅ | Maximum allowed price deviation from the copied trade (2% = `0.02`) |
+| `MAX_TRADE_SIZE_USD` | No | `50.00` | ✅ | Hard cap: maximum USDC to spend on any single copied trade |
+| `MAX_DELAY_SECONDS` | No | `10` | ✅ | Discard live trade events older than this many seconds |
+| `MAX_COPY_LOSS_PCT` | No | `0.20` | ✅ | Skip catch-up entries where the target is already this far underwater (20% = `0.20`) |
+| `COPY_SIZE_PCT` | No | `0.10` | ✅ | Size each trade as this fraction of available balance (10% = `0.10`). Floored at $5 (CLOB minimum), capped at `MAX_TRADE_SIZE_USD`. Set to blank/0 to always use `MAX_TRADE_SIZE_USD` exactly. |
+| `MIN_ENTRY_PRICE` | No | `0.02` | — | Minimum token price for catch-up entries (filters near-zero dust) |
+| `MAX_ENTRY_PRICE` | No | `0.999` | — | Maximum token price for catch-up entries. Set to `0.999` for targets who trade high-confidence NO positions. |
 
 ### Wallet Type
 
@@ -167,7 +169,8 @@ On first run with an empty or placeholder `.env`, the setup wizard prompts for:
 1. Private key (hidden input)
 2. Funder address
 3. Target wallet addresses
-4. Slippage, trade size, delay, and loss-threshold limits
+4. Max slippage, trade size cap, delay, and drawdown loss threshold
+5. Proportional trade size (`COPY_SIZE_PCT`) — press Enter to accept `0.10` (10% of balance)
 
 All values are saved to `.env` and reused on subsequent runs.
 
