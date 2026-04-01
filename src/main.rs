@@ -1,3 +1,4 @@
+pub mod api;
 pub mod backoff;
 pub mod clients;
 pub mod config;
@@ -159,6 +160,15 @@ async fn main() -> anyhow::Result<()> {
     // Gap C + Gap E: now receives risk_engine Arc to call record_loss() on loss-triggered
     // cancellations, and uses exponential backoff on CLOB errors.
     order_watcher::start_order_watcher(config.clone(), clob, state.clone(), risk_engine);
+
+    // ── Local Web API Server ──────────────────────────────────────────────────
+    let api_router = api::create_router(state.clone());
+    tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+            .await
+            .unwrap();
+        axum::serve(listener, api_router).await.unwrap();
+    });
 
     // ── Main thread: TUI or headless wait ─────────────────────────────────────
     if headless {

@@ -53,7 +53,7 @@ pub enum TradeSide {
     SELL,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EvaluatedTrade {
     pub original_event: TradeEvent,
     pub validated: bool,
@@ -77,7 +77,7 @@ pub struct OrderRequest {
 
 // -- Opportunity Scanner types -------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum ScanStatus {
     Monitoring,     // Valid entry candidate
     Entered,        // Order queued this session
@@ -124,7 +124,7 @@ impl ScanStatus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TargetPosition {
     pub title: String,
     pub outcome: String,

@@ -204,7 +204,7 @@ fn load_toml() -> Option<BotConfig> {
 }
 
 /// Write `BotConfig` to `config.toml` with inline comments.
-fn write_toml(cfg: &BotConfig) -> anyhow::Result<()> {
+pub fn write_toml(cfg: &BotConfig) -> anyhow::Result<()> {
     // Format the wallets as a TOML inline array.
     let wallets_toml = if cfg.targets.wallets.is_empty() {
         "[]".to_string()
@@ -292,7 +292,7 @@ retention_days = {retention}
 
 /// Write `.env` with secrets only (PRIVATE_KEY and FUNDER_ADDRESS).
 /// TARGET_WALLETS is now in config.toml [targets].wallets.
-fn write_secrets_env(private_key: &str, funder_address: &str) -> anyhow::Result<()> {
+pub fn write_secrets_env(private_key: &str, funder_address: &str) -> anyhow::Result<()> {
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
