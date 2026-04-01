@@ -1,6 +1,6 @@
 # polycopier
 
-![Polycopier](poly.png)
+![Polycopier](poly_img.png)
 
 A high-performance, terminal-based copy trading bot for Polymarket prediction markets,
 built in Rust against the official [`polymarket-client-sdk`](https://github.com/Polymarket/rs-clob-client).
