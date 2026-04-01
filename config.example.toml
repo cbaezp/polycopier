@@ -1,0 +1,56 @@
+# polycopier config -- safe to version control (no secrets here)
+# Secrets (PRIVATE_KEY, FUNDER_ADDRESS) stay in .env
+#
+# This file is auto-generated on first run if it doesn't exist.
+# Edit directly or use the [s] settings editor inside the TUI.
+
+[targets]
+# Polymarket proxy wallet addresses to copy-trade.
+# Add one or more addresses as a TOML array.
+wallets = [
+  "0xTargetWalletAddress1Here",
+  # "0xOptionalSecondWallet",
+]
+
+[execution]
+# Slippage buffer applied to copied trade price for limit orders (2% = 0.02)
+max_slippage_pct = 0.02
+# Hard ceiling per copied trade in USD -- overrides sizing calculation
+max_trade_size_usd = 10.00
+# Drop listener events older than N seconds (staleness filter)
+max_delay_seconds = 10
+# SELL size = held_size x sell_fee_buffer (absorbs CLOB fee, default 0.97 ~ 3%)
+sell_fee_buffer = 0.97
+
+[sizing]
+# Sizing algorithm: "self_pct" | "target_usd" | "fixed"
+#   self_pct   -- spend copy_size_pct% of YOUR balance per trade
+#   target_usd -- mirror the target's exact USD notional (capped at max_trade_size_usd)
+#   fixed      -- always spend exactly max_trade_size_usd
+mode = "self_pct"
+# Fraction of our balance to use per trade for self_pct mode (0.15 = 15%)
+copy_size_pct = 0.15
+
+[scanner]
+# Skip catch-up position if target is already this % underwater (0.40 = 40%)
+max_copy_loss_pct = 0.40
+# Skip catch-up if target already this % in profit -- prevents chasing (0.05 = 5%)
+max_copy_gain_pct = 0.05
+# Minimum token price for catch-up entries (filters near-zero dust)
+min_entry_price = 0.02
+# Maximum token price for catch-up entries
+max_entry_price = 0.999
+# Max positions queued per scan cycle -- raise to 2-3 if you miss many entries
+max_entries_per_cycle = 1
+
+[risk]
+# Max USD traded per UTC day (BUY + SELL combined). 0 = disabled.
+max_daily_volume_usd = 0
+# Consecutive losses before triggering a cooldown pause. 0 = disabled.
+max_consecutive_losses = 0
+# Seconds to pause after hitting max_consecutive_losses. Default 300 (5 min).
+loss_cooldown_secs = 300
+
+[ledger]
+# Days to retain closed trade ledger entries. 0 = never prune.
+retention_days = 90

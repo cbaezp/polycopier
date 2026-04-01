@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::log_capture::LogBuffer;
+
 use crate::models::{EvaluatedTrade, Position, TargetPosition, TradeSide};
 use crate::state::BotState;
 use crate::utils;
@@ -21,6 +22,29 @@ use rust_decimal::Decimal;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+// ---------------------------------------------------------------------------
+// Helper: read a dotted TOML key from config.toml into a display string
+// Used by SettingsField::new to pre-populate the settings editor.
+// ---------------------------------------------------------------------------
+fn read_toml_field(dotted_key: &str) -> Option<String> {
+    let raw = std::fs::read_to_string("config.toml").ok()?;
+    let table: toml::Table = raw.parse().ok()?;
+    let (section, key) = dotted_key.split_once('.')?;
+    let val = table.get(section)?.get(key)?;
+    // Render the TOML value as a plain string (strip quotes for strings).
+    // For arrays (e.g. targets.wallets), render as comma-separated.
+    let s = match val {
+        toml::Value::String(s) => s.clone(),
+        toml::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        other => other.to_string(),
+    };
+    Some(s)
+}
 
 // -- Exit signal ---------------------------------------------------------------
 /// Returned by start_tui to tell main what to do next.
@@ -49,9 +73,10 @@ impl SettingsField {
         hint: &'static str,
         secret: bool,
     ) -> Self {
-        let raw = std::env::var(env_key).unwrap_or_else(|_| default.to_string());
-        // Strip surrounding quotes added by dotenv file format
-        let value = raw.trim().trim_matches('"').to_string();
+        // env_key is now a dotted TOML path like "execution.max_slippage_pct".
+        // Read the current value from config.toml (via the BotConfig struct) so the
+        // settings editor shows real values, not env-var defaults.
+        let value = read_toml_field(env_key).unwrap_or_else(|| default.to_string());
         Self {
             label,
             env_key,
@@ -99,65 +124,114 @@ impl SettingsScreen {
         let fields = vec![
             SettingsField::new(
                 "Target Wallets",
-                "TARGET_WALLETS",
+                "targets.wallets",
                 "",
-                "Comma-separated proxy wallet addresses to copy-trade",
-                false,
-            ),
-            SettingsField::new(
-                "Max Trade Size (USD)",
-                "MAX_TRADE_SIZE_USD",
-                "10.00",
-                "Hard ceiling per copied trade regardless of sizing mode",
-                false,
-            ),
-            SettingsField::new(
-                "Max Slippage",
-                "MAX_SLIPPAGE_PCT",
-                "0.02",
-                "Price deviation allowed from copied trade  (0.02 = 2%)",
-                false,
-            ),
-            SettingsField::new(
-                "Max Event Age (secs)",
-                "MAX_DELAY_SECONDS",
-                "2",
-                "Drop live events older than N seconds",
-                false,
-            ),
-            SettingsField::new(
-                "Max Copy Loss",
-                "MAX_COPY_LOSS_PCT",
-                "0.40",
-                "Skip catch-up if target already this % underwater  (0.40 = 40%)",
-                false,
-            ),
-            SettingsField::new(
-                "Min Entry Price",
-                "MIN_ENTRY_PRICE",
-                "0.02",
-                "Minimum token price for catch-up entries",
-                false,
-            ),
-            SettingsField::new(
-                "Max Entry Price",
-                "MAX_ENTRY_PRICE",
-                "0.999",
-                "Maximum token price for catch-up entries",
+                "Polymarket proxy addresses to copy-trade (comma-separated)",
                 false,
             ),
             SettingsField::new(
                 "Sizing Mode",
-                "SIZING_MODE",
+                "sizing.mode",
                 "self_pct",
                 "fixed | self_pct | target_usd",
                 false,
             ),
             SettingsField::new(
                 "Copy Size %",
-                "COPY_SIZE_PCT",
+                "sizing.copy_size_pct",
                 "",
-                "Only used for self_pct mode  (0.10 = 10%)",
+                "Only used for self_pct mode  (0.15 = 15%)",
+                false,
+            ),
+            SettingsField::new(
+                "Max Trade Size (USD)",
+                "execution.max_trade_size_usd",
+                "10.00",
+                "Hard ceiling per copied trade regardless of sizing mode",
+                false,
+            ),
+            SettingsField::new(
+                "Max Slippage",
+                "execution.max_slippage_pct",
+                "0.02",
+                "Price deviation allowed from copied trade  (0.02 = 2%)",
+                false,
+            ),
+            SettingsField::new(
+                "Max Event Age (secs)",
+                "execution.max_delay_seconds",
+                "10",
+                "Drop live events older than N seconds",
+                false,
+            ),
+            SettingsField::new(
+                "Sell Fee Buffer",
+                "execution.sell_fee_buffer",
+                "0.97",
+                "SELL size = held x buffer (0.97 absorbs ~3% CLOB fee)",
+                false,
+            ),
+            SettingsField::new(
+                "Max Copy Loss",
+                "scanner.max_copy_loss_pct",
+                "0.40",
+                "Skip catch-up if target already this % underwater  (0.40 = 40%)",
+                false,
+            ),
+            SettingsField::new(
+                "Max Copy Gain",
+                "scanner.max_copy_gain_pct",
+                "0.05",
+                "Skip catch-up if target already this % in profit  (0.05 = 5%)",
+                false,
+            ),
+            SettingsField::new(
+                "Min Entry Price",
+                "scanner.min_entry_price",
+                "0.02",
+                "Minimum token price for catch-up entries",
+                false,
+            ),
+            SettingsField::new(
+                "Max Entry Price",
+                "scanner.max_entry_price",
+                "0.999",
+                "Maximum token price for catch-up entries",
+                false,
+            ),
+            SettingsField::new(
+                "Scan Max/Cycle",
+                "scanner.max_entries_per_cycle",
+                "1",
+                "Max positions queued per scan cycle  (1 = conservative)",
+                false,
+            ),
+            SettingsField::new(
+                "Daily Volume Limit",
+                "risk.max_daily_volume_usd",
+                "0",
+                "Max USD traded per UTC day. 0 = disabled.",
+                false,
+            ),
+            SettingsField::new(
+                "Max Consec Losses",
+                "risk.max_consecutive_losses",
+                "0",
+                "Losses before cooldown pause. 0 = disabled.",
+                false,
+            ),
+            SettingsField::new(
+                "Loss Cooldown (secs)",
+                "risk.loss_cooldown_secs",
+                "300",
+                "Seconds to pause after hitting max consecutive losses",
+                false,
+            ),
+            SettingsField::new(
+                "Ledger Retention (days)",
+                "ledger.retention_days",
+                "90",
+                "Days to keep closed ledger entries. 0 = never prune.",
                 false,
             ),
         ];
@@ -228,26 +302,92 @@ impl SettingsScreen {
     }
 
     pub fn save_to_dotenv(&self) -> anyhow::Result<()> {
-        self.save_to_path(std::path::Path::new(".env"))
+        self.save_to_path(std::path::Path::new("config.toml"))
     }
 
-    /// Testable variant -- writes to an arbitrary path instead of ".env".
+    /// Testable variant -- writes tunables to an arbitrary TOML path; also
+    /// refreshes `.env` with secrets-only entries.
     pub fn save_to_path(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        use std::fs::OpenOptions;
         use std::io::Write;
+
+        // Build a BotConfig from the current field values
+        let get = |key: &str| -> String {
+            self.fields
+                .iter()
+                .find(|f| f.env_key == key)
+                .map(|f| f.value.clone())
+                .unwrap_or_default()
+        };
+        let dec = |key: &str, fallback: &str| -> rust_decimal::Decimal {
+            get(key)
+                .parse()
+                .unwrap_or_else(|_| fallback.parse().unwrap())
+        };
+        let u32v = |key: &str, fallback: u32| -> u32 { get(key).parse().unwrap_or(fallback) };
+        let u64v = |key: &str, fallback: u64| -> u64 { get(key).parse().unwrap_or(fallback) };
+        let i64v = |key: &str, fallback: i64| -> i64 { get(key).parse().unwrap_or(fallback) };
+        let usizev =
+            |key: &str, fallback: usize| -> usize { get(key).parse().unwrap_or(fallback).max(1) };
+
+        let copy_size_pct: Option<rust_decimal::Decimal> = get("sizing.copy_size_pct")
+            .parse()
+            .ok()
+            .filter(|&p: &rust_decimal::Decimal| {
+                p > rust_decimal::Decimal::ZERO && p <= rust_decimal::Decimal::ONE
+            });
+
+        // Parse target wallets from the comma-separated TUI field
+        let wallets: Vec<String> = get("targets.wallets")
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let wallets_toml = if wallets.is_empty() {
+            "[]".to_string()
+        } else {
+            let q: Vec<String> = wallets.iter().map(|w| format!("\"{w}\"")).collect();
+            format!("[{}]", q.join(", "))
+        };
+
+        let copy_size_line = match copy_size_pct {
+            Some(p) => format!("copy_size_pct = {p}"),
+            None => "# copy_size_pct = 0.15  # only used for self_pct mode".to_string(),
+        };
+
+        // Build TOML manually (same format as config.rs write_toml).
+        let content = format!(
+            "# polycopier config -- safe to version control (no secrets here)\n             # Secrets (PRIVATE_KEY, FUNDER_ADDRESS) stay in .env\n             \n             [targets]\n             wallets = {wallets}\n             \n             [execution]\n             max_slippage_pct = {slippage}\n             max_trade_size_usd = {max_trade}\n             max_delay_seconds = {delay}\n             sell_fee_buffer = {fee_buf}\n             \n             [sizing]\n             mode = \"{mode}\"\n             {copy_size_line}\n             \n             [scanner]\n             max_copy_loss_pct = {loss_pct}\n             max_copy_gain_pct = {gain_pct}\n             min_entry_price = {min_price}\n             max_entry_price = {max_price}\n             max_entries_per_cycle = {max_entries}\n             \n             [risk]\n             max_daily_volume_usd = {daily_vol}\n             max_consecutive_losses = {consec_loss}\n             loss_cooldown_secs = {cooldown}\n             \n             [ledger]\n             retention_days = {retention}\n",
+            wallets = wallets_toml,
+            slippage = dec("execution.max_slippage_pct", "0.02"),
+            max_trade = dec("execution.max_trade_size_usd", "10.00"),
+            delay = i64v("execution.max_delay_seconds", 10),
+            fee_buf = dec("execution.sell_fee_buffer", "0.97"),
+            mode = get("sizing.mode"),
+            copy_size_line = copy_size_line,
+            loss_pct = dec("scanner.max_copy_loss_pct", "0.40"),
+            gain_pct = dec("scanner.max_copy_gain_pct", "0.05"),
+            min_price = dec("scanner.min_entry_price", "0.02"),
+            max_price = dec("scanner.max_entry_price", "0.999"),
+            max_entries = usizev("scanner.max_entries_per_cycle", 1),
+            daily_vol = dec("risk.max_daily_volume_usd", "0"),
+            consec_loss = u32v("risk.max_consecutive_losses", 0),
+            cooldown = u64v("risk.loss_cooldown_secs", 300),
+            retention = u32v("ledger.retention_days", 90),
+        );
+        std::fs::write(path, content)?;
+
+        // Refresh .env with secrets only (TARGET_WALLETS is now in config.toml)
         let pk = std::env::var("PRIVATE_KEY").unwrap_or_default();
         let fa = std::env::var("FUNDER_ADDRESS").unwrap_or_default();
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)?;
-        writeln!(f, "PRIVATE_KEY=\"{}\"", pk.trim().trim_matches('"'))?;
-        writeln!(f, "FUNDER_ADDRESS=\"{}\"", fa.trim().trim_matches('"'))?;
-        for field in &self.fields {
-            if !field.value.is_empty() {
-                writeln!(f, "{}=\"{}\"", field.env_key, field.value)?;
-            }
+        if !pk.is_empty() {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(".env")?;
+            writeln!(f, "# polycopier secrets -- DO NOT version control")?;
+            writeln!(f, "PRIVATE_KEY=\"{}\"", pk.trim().trim_matches('"'))?;
+            writeln!(f, "FUNDER_ADDRESS=\"{}\"", fa.trim().trim_matches('"'))?;
         }
         Ok(())
     }
@@ -929,8 +1069,37 @@ fn render_settings(f: &mut Frame, config: &Config, area: ratatui::layout::Rect) 
             Span::styled("   Targets: ", label),
             Span::styled(format!("{}", config.target_wallets.len()), val),
         ]),
+        Line::from(vec![
+            Span::styled("  Risk:        ", label),
+            Span::styled(
+                if config.max_daily_volume_usd > rust_decimal::Decimal::ZERO {
+                    format!("vol≤${:.0}/day", config.max_daily_volume_usd)
+                } else {
+                    "vol: unlimited".to_string()
+                },
+                val,
+            ),
+            Span::styled("   losses: ", label),
+            Span::styled(
+                if config.max_consecutive_losses == 0 {
+                    "∞".to_string()
+                } else {
+                    format!(
+                        "{} then {}s cooldown",
+                        config.max_consecutive_losses, config.loss_cooldown_secs
+                    )
+                },
+                Style::default()
+                    .fg(if config.max_consecutive_losses == 0 {
+                        Color::DarkGray
+                    } else {
+                        Color::Cyan
+                    })
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::from(Span::styled(
-            "  [s] Edit settings   (re-runs wizard, restarts bot)",
+            "  [s] Edit settings   (opens settings editor)",
             Style::default().fg(Color::DarkGray),
         )),
     ];

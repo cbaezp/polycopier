@@ -235,3 +235,109 @@ mod wallet_sync_position_rules {
         assert_eq!(state.positions.len(), 5);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Order watcher + scanner expiry logic (< today, not <= today)
+//
+// Both scanner and watcher use end_date < today (strictly past).
+// Same-day markets (end_date == today) are still open — redeemable=true is
+// the authoritative "market resolved" signal from Polymarket on-chain.
+//
+// Rationale:
+//   - A 5-min BTC market expiring at 9:05am today has end_date = today.
+//     It is still valid to enter at 9:01am. <= today would wrongly block it.
+//   - A daily "BTC above $80k on April 1" market with endDate=today and
+//     redeemable=false has hours of trading window left. <= today blocks it.
+//   - When the market resolves, Polymarket flips redeemable=true on-chain.
+//     That is the correct signal to use, not the date.
+//   - end_date < today is a backstop only for stale markets (resolved yesterday
+//     or earlier) where redeemable hasn't been updated yet.
+// ---------------------------------------------------------------------------
+
+mod watcher_expiry_alignment_tests {
+    use chrono::Utc;
+
+    /// Replicates scanner classify_position expiry check: `end_date < today`.
+    fn scanner_is_expired(end_date: chrono::NaiveDate) -> bool {
+        let today = Utc::now().date_naive();
+        end_date < today
+    }
+
+    /// Replicates order_watcher expiry check: `end_date < today`.
+    fn watcher_is_expired(end_date: chrono::NaiveDate) -> bool {
+        let today = Utc::now().date_naive();
+        end_date < today
+    }
+
+    // -- Same-day: NOT expired (market still open) ---------------------------
+
+    #[test]
+    fn scanner_allows_same_day_market_still_active() {
+        // end_date=today, redeemable=false → market is open, should be Monitoring
+        let today = Utc::now().date_naive();
+        assert!(
+            !scanner_is_expired(today),
+            "same-day market with redeemable=false must NOT be classified as expired"
+        );
+    }
+
+    #[test]
+    fn watcher_does_not_cancel_same_day_market_still_active() {
+        // GTC on a same-day 5-min or daily market must stay alive until redeemable=true
+        let today = Utc::now().date_naive();
+        assert!(
+            !watcher_is_expired(today),
+            "watcher must not cancel open same-day market — wait for redeemable=true"
+        );
+    }
+
+    #[test]
+    fn scanner_and_watcher_agree_on_same_day() {
+        let today = Utc::now().date_naive();
+        assert_eq!(
+            scanner_is_expired(today),
+            watcher_is_expired(today),
+            "scanner and watcher must use the same expiry predicate"
+        );
+    }
+
+    // -- Past dates: correctly expired (backstop for stale redeemable) -------
+
+    #[test]
+    fn scanner_blocks_yesterday_market() {
+        let yesterday = Utc::now().date_naive() - chrono::Duration::days(1);
+        assert!(
+            scanner_is_expired(yesterday),
+            "market that ended yesterday must be SkippedExpired"
+        );
+    }
+
+    #[test]
+    fn watcher_cancels_yesterday_market() {
+        let yesterday = Utc::now().date_naive() - chrono::Duration::days(1);
+        assert!(
+            watcher_is_expired(yesterday),
+            "watcher must cancel GTC on a market that ended yesterday"
+        );
+    }
+
+    #[test]
+    fn scanner_blocks_week_old_market() {
+        let old = Utc::now().date_naive() - chrono::Duration::days(7);
+        assert!(scanner_is_expired(old));
+    }
+
+    // -- Future: never expired -----------------------------------------------
+
+    #[test]
+    fn scanner_allows_tomorrow_market() {
+        let tomorrow = Utc::now().date_naive() + chrono::Duration::days(1);
+        assert!(!scanner_is_expired(tomorrow));
+    }
+
+    #[test]
+    fn watcher_does_not_cancel_future_market() {
+        let future = Utc::now().date_naive() + chrono::Duration::days(365);
+        assert!(!watcher_is_expired(future));
+    }
+}

@@ -29,6 +29,12 @@ pub fn test_config() -> Config {
         max_entry_price: dec!(0.999),
         sizing_mode: SizingMode::Fixed,
         copy_size_pct: None,
+        scan_max_entries_per_cycle: 1,
+        sell_fee_buffer: dec!(0.97),
+        ledger_retention_days: 90,
+        max_daily_volume_usd: dec!(0),
+        max_consecutive_losses: 0,
+        loss_cooldown_secs: 300,
     }
 }
 

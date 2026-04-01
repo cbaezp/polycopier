@@ -6,6 +6,10 @@
 .env.local
 .env.production
 
+# Per-environment tunable config — auto-generated from config.example.toml on first run
+# Commit config.example.toml instead; each environment manages its own config.toml
+config.toml
+
 # Runtime logs and data
 *.log
 bot.log

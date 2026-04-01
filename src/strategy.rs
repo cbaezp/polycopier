@@ -13,6 +13,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
@@ -88,6 +89,120 @@ pub fn compute_order_usd(
 }
 
 // ---------------------------------------------------------------------------
+// Debounce cache with TTL eviction (Gap 5)
+// ---------------------------------------------------------------------------
+
+/// Maximum number of entries the debounce cache may hold simultaneously.
+/// At ~3 events/s per target × 4 targets, 512 covers >40 seconds of burst.
+const DEBOUNCE_CACHE_CAP: usize = 512;
+/// Entries older than this are evicted unconditionally.
+const DEBOUNCE_STALE_SECS: u64 = 5;
+/// Events for the same key within this window are coalesced (size accumulated).
+const DEBOUNCE_WINDOW_SECS: i64 = 1;
+
+struct DebounceCache {
+    map: HashMap<String, (TradeEvent, Instant)>,
+}
+
+impl DebounceCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    /// Evict all entries older than `DEBOUNCE_STALE_SECS`.
+    fn purge_stale(&mut self) {
+        self.map
+            .retain(|_, (_, inserted)| inserted.elapsed().as_secs() < DEBOUNCE_STALE_SECS);
+    }
+
+    /// Insert or accumulate an event.  Returns `true` if the event was debounced
+    /// (accumulated into an existing entry) so the caller should `continue`.
+    fn insert_or_accumulate(&mut self, key: String, event: TradeEvent) -> bool {
+        // Evict stale entries before checking capacity
+        self.purge_stale();
+
+        // Enforce capacity ceiling — evict oldest entry if at cap
+        if self.map.len() >= DEBOUNCE_CACHE_CAP && !self.map.contains_key(&key) {
+            // Remove the entry with the oldest insertion time
+            if let Some(oldest_key) = self
+                .map
+                .iter()
+                .min_by_key(|(_, (_, t))| *t)
+                .map(|(k, _)| k.clone())
+            {
+                self.map.remove(&oldest_key);
+            }
+        }
+
+        if let Some((existing, inserted)) = self.map.get_mut(&key) {
+            let age_secs = chrono::Utc::now().timestamp() - existing.timestamp;
+            if age_secs < DEBOUNCE_WINDOW_SECS {
+                // Accumulate size — still within the debounce window
+                existing.size += event.size;
+                debug!(
+                    "Debounced fragmented fill for {}. New size: {}",
+                    existing.token_id, existing.size
+                );
+                return true; // caller should `continue`
+            } else {
+                // Window expired — replace with fresh event
+                *existing = event;
+                *inserted = Instant::now();
+                return false;
+            }
+        }
+
+        self.map.insert(key, (event, Instant::now()));
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Live query cache (Gap 13)
+// ---------------------------------------------------------------------------
+
+/// Cache TTL in seconds for `holds_query` results.  Fresh enough that a trade
+/// arriving 3s after a prior one for the same wallet re-uses the cached result,
+/// but stale enough that a fast-moving market doesn't use a 10s-old snapshot.
+const LIVE_QUERY_CACHE_TTL_SECS: u64 = 3;
+
+struct LiveQueryCache {
+    inner: HashMap<String, (bool, Instant)>,
+}
+
+impl LiveQueryCache {
+    fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
+
+    fn get(&self, wallet: &str, token_id: &str) -> Option<bool> {
+        let key = format!("{wallet}:{token_id}");
+        self.inner.get(&key).and_then(|(result, inserted)| {
+            if inserted.elapsed().as_secs() < LIVE_QUERY_CACHE_TTL_SECS {
+                Some(*result)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn set(&mut self, wallet: &str, token_id: &str, holds: bool) {
+        let key = format!("{wallet}:{token_id}");
+        self.inner.insert(key, (holds, Instant::now()));
+    }
+
+    /// Evict expired entries to keep memory bounded.
+    fn evict_expired(&mut self) {
+        self.inner
+            .retain(|_, (_, t)| t.elapsed().as_secs() < LIVE_QUERY_CACHE_TTL_SECS * 4);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Injectable live position checker
 // ---------------------------------------------------------------------------
 
@@ -150,10 +265,18 @@ pub fn start_strategy_engine(
     tokio::spawn(async move {
         info!("Strategy Engine Started. Monitoring edge cases (debouncing, closures...)");
 
-        // Target -> AssetID -> Token Info/Debounce Context
-        let mut debounce_cache: HashMap<String, TradeEvent> = HashMap::new();
+        let mut debounce = DebounceCache::new();
+        let mut live_cache = LiveQueryCache::new();
+        // Periodic cache maintenance counter
+        let mut event_count: u32 = 0;
 
         while let Some(event) = rx.recv().await {
+            event_count += 1;
+            // Evict expired live-query cache entries every 50 events (Gap 13)
+            if event_count.is_multiple_of(50) {
+                live_cache.evict_expired();
+            }
+
             let mut eval = EvaluatedTrade {
                 original_event: event.clone(),
                 validated: true,
@@ -166,31 +289,16 @@ pub fn start_strategy_engine(
                 eval.reason = Some("Wallet mismatch".to_string());
             }
 
-            // 4. Fragmented Fill Edge Case (Debounce 200ms)
-            // A simplified debounce: Just track timestamp diff. If same token < 1 sec, accumulate sizes.
+            // 2. Fragmented fill debounce (Gap 5 — bounded cache with TTL eviction)
             let cache_key = format!(
                 "{}_{}_{:?}",
                 event.taker_address, event.token_id, event.side
             );
-            if eval.validated {
-                if let Some(existing) = debounce_cache.get_mut(&cache_key) {
-                    if (chrono::Utc::now().timestamp() - existing.timestamp) < 1 {
-                        existing.size += event.size;
-                        debug!(
-                            "Debounced fragmented fill for {}. New size: {}",
-                            existing.token_id, existing.size
-                        );
-                        continue;
-                    } else {
-                        // Expired, flush it out
-                        debounce_cache.insert(cache_key.clone(), event.clone());
-                    }
-                } else {
-                    debounce_cache.insert(cache_key.clone(), event.clone());
-                }
+            if eval.validated && debounce.insert_or_accumulate(cache_key, event.clone()) {
+                continue; // accumulated — skip this event
             }
 
-            // Risk bounds
+            // 3. Risk bounds
             if eval.validated {
                 if let Err(reason) = risk_engine.check_trade(&event) {
                     eval.validated = false;
@@ -208,15 +316,14 @@ pub fn start_strategy_engine(
             //   a close.  A SELL from a different target is irrelevant to our
             //   position.
             //
-            //   LIVE VERIFICATION: for BUY events we query the target's wallet live
-            //   (they should show the position after buying); for SELL events we
-            //   query OUR wallet live (authoritative — did we actually hold it?).
-            //   Both calls fall back to the scanner cache on API timeout/error.
+            //   LIVE VERIFICATION (Gap 13 — cached): for BUY events we query the
+            //   target's wallet live; for SELL events we query OUR wallet live.
+            //   Results are cached for LIVE_QUERY_CACHE_TTL_SECS seconds to reduce
+            //   API calls and latency for burst activity.
             if eval.validated {
                 // --- Resolve live state for this token ---
 
-                // Our position: query live (both calls run in parallel),
-                // falling back to the scanner cache on API timeout/error.
+                // Our position: check cache first, then live API
                 let cache_we_hold = {
                     let guard = state.read().await;
                     guard.positions.contains_key(&event.token_id)
@@ -228,13 +335,48 @@ pub fn start_strategy_engine(
                     })
                 };
 
-                // Run both live queries in parallel to minimise latency.
-                let (live_we_hold_opt, live_target_holds_opt) = tokio::join!(
-                    holds_query(config.funder_address.clone(), event.token_id.clone()),
-                    holds_query(event.taker_address.clone(), event.token_id.clone()),
-                );
-                let live_we_hold = live_we_hold_opt.unwrap_or(cache_we_hold);
-                let live_target_holds = live_target_holds_opt.unwrap_or(cache_target_holds);
+                // Check live-query cache before making API calls (Gap 13)
+                let our_cached = live_cache.get(&config.funder_address, &event.token_id);
+                let target_cached = live_cache.get(&event.taker_address, &event.token_id);
+
+                let (live_we_hold, live_target_holds) = if our_cached.is_some()
+                    && target_cached.is_some()
+                {
+                    // Both are cached — no API call needed
+                    (
+                        our_cached.unwrap_or(cache_we_hold),
+                        target_cached.unwrap_or(cache_target_holds),
+                    )
+                } else {
+                    // Run whichever queries are needed in parallel
+                    let (live_we_hold_opt, live_target_holds_opt) = tokio::join!(
+                        async {
+                            if let Some(cached) = our_cached {
+                                Some(cached)
+                            } else {
+                                holds_query(config.funder_address.clone(), event.token_id.clone())
+                                    .await
+                            }
+                        },
+                        async {
+                            if let Some(cached) = target_cached {
+                                Some(cached)
+                            } else {
+                                holds_query(event.taker_address.clone(), event.token_id.clone())
+                                    .await
+                            }
+                        },
+                    );
+
+                    let we_hold = live_we_hold_opt.unwrap_or(cache_we_hold);
+                    let target_holds = live_target_holds_opt.unwrap_or(cache_target_holds);
+
+                    // Populate cache with fresh results
+                    live_cache.set(&config.funder_address, &event.token_id, we_hold);
+                    live_cache.set(&event.taker_address, &event.token_id, target_holds);
+
+                    (we_hold, target_holds)
+                };
 
                 // Ledger lookup for this token (who we copied it from, if anyone).
                 let ledger_entry = {
@@ -247,8 +389,6 @@ pub fn start_strategy_engine(
                     // ---- BUY -----------------------------------------------
                     TradeSide::BUY => {
                         if already_in_token {
-                            // ONE-POSITION-PER-TOKEN: we already hold this via
-                            // another target (or via this same target's prior entry).
                             let from = ledger_entry
                                 .as_ref()
                                 .map(|e| &e.source_wallet[..e.source_wallet.len().min(10)])
@@ -259,9 +399,6 @@ pub fn start_strategy_engine(
                                 from
                             ))
                         } else if !live_target_holds && live_we_hold {
-                            // Target has no position but we're long → target closing
-                            // their short; copying this BUY would incorrectly add to
-                            // our long.
                             Some(
                                 "BUY skipped: we hold long but target has no position \
                                  (likely closing their short)"
@@ -274,27 +411,17 @@ pub fn start_strategy_engine(
                     // ---- SELL ----------------------------------------------
                     TradeSide::SELL => {
                         if live_we_hold {
-                            // We hold this position.  Determine if the seller is the
-                            // target we copied it from.
                             match &ledger_entry {
                                 Some(entry) if entry.source_wallet == event.taker_address => {
                                     None // Correct source is selling → close
                                 }
-                                Some(entry) => {
-                                    // A *different* target is selling — their action
-                                    // is irrelevant to the position we copied from
-                                    // entry.source_wallet.  Keep holding.
-                                    Some(format!(
-                                        "SELL skipped: {} sold but we copied from {} — \
-                                         keeping position",
-                                        &event.taker_address[..event.taker_address.len().min(10)],
-                                        &entry.source_wallet[..entry.source_wallet.len().min(10)],
-                                    ))
-                                }
+                                Some(entry) => Some(format!(
+                                    "SELL skipped: {} sold but we copied from {} — \
+                                     keeping position",
+                                    &event.taker_address[..event.taker_address.len().min(10)],
+                                    &entry.source_wallet[..entry.source_wallet.len().min(10)],
+                                )),
                                 None => {
-                                    // We hold it but have no ledger entry — either the
-                                    // ledger was lost or the position was entered manually.
-                                    // Defensive: close it when ANY target sells.
                                     warn!(
                                         "SELL: we hold token {} with no ledger entry — \
                                          closing defensively.",
@@ -304,8 +431,6 @@ pub fn start_strategy_engine(
                                 }
                             }
                         } else if let Some(entry) = &ledger_entry {
-                            // Ledger says we had a copy but live API shows we don't hold it.
-                            // Position was closed while bot was down — sync ledger and skip.
                             warn!(
                                 "SELL: ledger shows active copy of {} from {} but we no longer \
                                  hold it — marking closed.",
@@ -318,9 +443,6 @@ pub fn start_strategy_engine(
                                 "SELL skipped: position already closed (ledger synced)".to_string(),
                             )
                         } else {
-                            // We don't hold it and there's no ledger entry.
-                            // Target is either closing a long we never entered (bot
-                            // was down during entry) or opening a short.
                             if live_target_holds {
                                 Some(
                                     "SELL skipped: target closing long we never entered"
@@ -354,13 +476,14 @@ pub fn start_strategy_engine(
 
                 let is_closing = event.side == TradeSide::SELL;
 
-                // Determine limit price: rounded to 3dp (CLOB tick), capped to [0.001, 0.999]
+                // Determine limit price: rounded to 2dp (CLOB tick), capped to [0.01, 0.99]
                 let limit_price =
                     calculate_limit_price(event.price, event.side, config.max_slippage_pct);
 
                 let order = if is_closing {
                     // -- SELL: close our position using our held size (not the target's size) --
-                    let fee_factor = Decimal::new(97, 2); // 0.97 -- CLOB fee buffer for SELLs
+                    // Gap 15: fee buffer is now read from config (default 0.97).
+                    let fee_factor = config.sell_fee_buffer;
                     let our_held_size = {
                         let guard = state.read().await;
                         guard
@@ -399,7 +522,6 @@ pub fn start_strategy_engine(
                     let buy_size = raw_size.round_dp(2); // CLOB requires 2dp lot size
 
                     // CLOB hard minimum: 5 shares. Orders below this always 400.
-                    // With e.g. 7% of $24 = $1.68 at price $0.98 → 1.71 shares < 5 → skip.
                     if buy_size < MIN_ORDER_SHARES {
                         warn!(
                             "BUY skipped: computed {:.2} shares is below CLOB minimum of {} shares \
@@ -418,7 +540,6 @@ pub fn start_strategy_engine(
                             None
                         } else {
                             // Check whether we already have a pending GTC order for this token.
-                            // Catches WS-triggered events for markets with an existing live GTC order.
                             let already_pending = {
                                 let guard = state.read().await;
                                 guard.pending_order_tokens.contains(&event.token_id)
@@ -438,7 +559,7 @@ pub fn start_strategy_engine(
                                 })
                             }
                         }
-                    } // end MIN_ORDER_SHARES check
+                    }
                 };
 
                 if let Some(order) = order {
@@ -458,12 +579,19 @@ pub fn start_strategy_engine(
                     let order_price = order.price;
                     let ledger_clone = copy_ledger.clone();
 
+                    // Capture entry_price from ledger BEFORE spawning for realized PnL.
+                    let entry_price = if is_closing {
+                        let ledger = copy_ledger.lock().await;
+                        ledger
+                            .find_active_for_token(&event.token_id)
+                            .map(|e| e.entry_price)
+                    } else {
+                        None
+                    };
+
                     tokio::spawn(async move {
                         match submitter_clone(order).await {
                             Ok(()) => {
-                                // Record in the copy ledger so subsequent events for this
-                                // token are classified correctly (source wallet tracking,
-                                // one-position-per-token rule, SELL gating).
                                 let mut ledger = ledger_clone.lock().await;
                                 if is_closing {
                                     ledger.record_close(&token_id_clone, &source_wallet_clone);
@@ -472,6 +600,16 @@ pub fn start_strategy_engine(
                                         &token_id_clone[..token_id_clone.len().min(12)],
                                         &source_wallet_clone[..source_wallet_clone.len().min(10)],
                                     );
+                                    // Accumulate realized PnL
+                                    if let Some(avg_entry) = entry_price {
+                                        let pnl = (order_price - avg_entry) * order_size;
+                                        let mut guard = state_clone.write().await;
+                                        guard.realized_pnl += pnl;
+                                        // Subtract this token's contribution from unrealized;
+                                        // price refresh corrects the full sum within 20s.
+                                        let old_unrealized = (order_price - avg_entry) * order_size;
+                                        guard.unrealized_pnl -= old_unrealized;
+                                    }
                                 } else {
                                     ledger.record_copy(
                                         token_id_clone.clone(),

@@ -101,10 +101,16 @@ The bot can also run **headless** (no TUI) as a systemd daemon on a Linux server
 
   All modes enforce a $5.00 CLOB minimum and `MAX_TRADE_SIZE_USD` ceiling.
 
-- **Risk engine** - per-trade minimum notional ($5.00 CLOB floor), per-trade size cap (`MAX_TRADE_SIZE_USD`), and three scanner guards:
-  - `MAX_COPY_LOSS_PCT` — skip catch-up entries where the target is already too far underwater (position is declining; don't follow a loser even at a cheaper price)
-  - `MAX_COPY_GAIN_PCT` — skip catch-up entries where the target is already too far in profit (price has moved away from their entry; chasing adds slippage with no edge)
-  - **Expiry guard** — skip any position on a market with `redeemable=true` (already resolved) or whose `endDate` is in the past
+- **Risk engine** — multi-layer defence applied to every trade event:
+  - **Micro-trade filter** — rejects orders with < $1.00 notional (anti-spoofing)
+  - **Size cap** — `MAX_TRADE_SIZE_USD` ceiling on every trade
+  - **Daily volume limit** — `MAX_DAILY_VOLUME_USD` (0 = disabled); counts both BUY and SELL side; resets at UTC midnight
+  - **Consecutive-loss circuit breaker** — `MAX_CONSECUTIVE_LOSSES` (0 = disabled); pauses trading for `LOSS_COOLDOWN_SECS` after N consecutive losses
+  - **Rapid-flip guard** — 60-second cooldown per token prevents the bot from immediately re-entering a position it just exited
+  - **Scanner guards** applied only to catch-up (scanner) entries:
+    - `MAX_COPY_LOSS_PCT` — skip if target is already this far underwater
+    - `MAX_COPY_GAIN_PCT` — skip if target is already this far in profit (chasing adds slippage)
+    - **Expiry guard** — skip if `redeemable=true` (market resolved on-chain) or `end_date` is strictly in the past (`< today`). Same-day markets are **not** blocked — `redeemable` is the authoritative settlement signal; `end_date < today` is only a backstop for stale API data
 
 - **Terminal UI** - six-panel ratatui interface:
   - Account dashboard (balance, PnL, **API-sourced Copied counter**)
@@ -189,31 +195,79 @@ The compiled binary will be at `target/release/polycopier`.
 
 ## Configuration
 
-All configuration is stored in a `.env` file. You can either create it manually by copying
-`.env.example`, or let the bot generate it interactively on first run.
+polycopier uses a **two-file configuration design** for security and maintainability:
+
+| File             | Contents                                       | Version-controlled? |
+|------------------|------------------------------------------------|---------------------|
+| `.env`           | Secrets: `PRIVATE_KEY`, `FUNDER_ADDRESS`, `TARGET_WALLETS` | **No** (in `.gitignore`) |
+| `config.toml`    | All tunables (risk, sizing, scanner, etc.)     | **Yes** (no secrets) |
 
 ```bash
+# First run: copy the examples and fill in your secrets
 cp .env.example .env
-# Edit .env with your values, then:
+cp config.example.toml config.toml  # optional — bot auto-generates on startup
+# Edit .env with your private key and wallet addresses
 cargo run --release
 ```
 
-### Environment Variables
+On first run, if `config.toml` is missing the bot auto-generates it from defaults
+(or migrates any legacy tunable values still present in `.env`).
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `PRIVATE_KEY` | Yes | - | Hex private key for the signing wallet (`0x...` or plain hex) |
-| `FUNDER_ADDRESS` | Yes | - | Proxy/Safe wallet address that holds USDC (shown on your Polymarket profile) |
-| `TARGET_WALLETS` | Yes | - | Comma-separated list of target proxy wallet addresses to copy |
-| `SIZING_MODE` | No | `self_pct` | Sizing strategy: `self_pct`, `target_usd`, or `fixed` |
-| `COPY_SIZE_PCT` | No | `0.15` | Fraction of our balance per trade when `SIZING_MODE=self_pct` (e.g. `0.15` = 15%) |
-| `MAX_SLIPPAGE_PCT` | No | `0.02` | Slippage buffer added to the target's avg entry price for limit orders (2% = `0.02`) |
-| `MAX_TRADE_SIZE_USD` | No | `10.00` | Maximum USDC to spend per copied trade |
-| `MAX_DELAY_SECONDS` | No | `10` | Discard live trade events (listener) older than this many seconds |
-| `MAX_COPY_LOSS_PCT` | No | `0.20` | Skip catch-up entries where target is already this far in the red — risk filter, not price filter (20% = `0.20`) |
-| `MAX_COPY_GAIN_PCT` | No | `0.05` | Skip catch-up entries where target is already this far in profit — prevents chasing moved positions (5% = `0.05`) |
-| `MIN_ENTRY_PRICE` | No | `0.02` | Minimum current token price for catch-up entries (filters near-zero dust) |
-| `MAX_ENTRY_PRICE` | No | `0.999` | Maximum current token price for catch-up entries. Raise above `0.95` when copying targets who trade high-confidence NO positions |
+### `.env` — Secrets only
+
+| Variable          | Required | Description |
+|-------------------|----------|-------------|
+| `PRIVATE_KEY`     | **Yes**  | Hex private key for the signing wallet (`0x...` or plain hex) |
+| `FUNDER_ADDRESS`  | **Yes**  | Proxy/Safe wallet address that holds USDC (shown on Polymarket profile) |
+| `TARGET_WALLETS`  | **Yes**  | Comma-separated list of target proxy wallet addresses to copy |
+
+### `config.toml` — Tunables
+
+#### `[execution]`
+
+| Key | Default | Description |
+|---|---|---|
+| `max_slippage_pct` | `0.02` | Slippage buffer added to the target's avg entry price for limit orders (2% = `0.02`) |
+| `max_trade_size_usd` | `10.00` | Maximum USDC to spend per copied trade (hard ceiling for all sizing modes) |
+| `max_delay_seconds` | `10` | Discard live trade events older than this many seconds (staleness filter) |
+| `sell_fee_buffer` | `0.97` | `sell_size = held × buffer` — absorbs ~3% CLOB fee. Default `0.97` |
+
+#### `[sizing]`
+
+| Key | Default | Description |
+|---|---|---|
+| `mode` | `"self_pct"` | Sizing strategy: `"self_pct"`, `"target_usd"`, or `"fixed"` |
+| `copy_size_pct` | `0.15` | Fraction of our balance per trade when `mode = "self_pct"` (e.g. `0.15` = 15%) |
+
+| Mode | Formula | When to use |
+|---|---|---|
+| `self_pct` (default) | `balance × copy_size_pct` | Fixed % of your balance — scales naturally with account size |
+| `target_usd` | `target_size × target_price` | Mirror the target's exact dollar notional |
+| `fixed` | Always `max_trade_size_usd` | Simple deterministic size |
+
+#### `[scanner]`
+
+| Key | Default | Description |
+|---|---|---|
+| `max_copy_loss_pct` | `0.40` | Skip catch-up if target is already this far underwater (40% = `0.40`) |
+| `max_copy_gain_pct` | `0.05` | Skip catch-up if target is already this far in profit (5% = `0.05`) |
+| `min_entry_price` | `0.02` | Minimum token price for catch-up entries (filters near-zero dust) |
+| `max_entry_price` | `0.999` | Maximum token price for catch-up entries |
+| `max_entries_per_cycle` | `1` | Max positions queued per scan cycle. Raise to 2–3 to enter multiple opportunities simultaneously |
+
+#### `[risk]`
+
+| Key | Default | Description |
+|---|---|---|
+| `max_daily_volume_usd` | `0` | Total USD the bot may trade per UTC day (BUY + SELL). `0` = disabled |
+| `max_consecutive_losses` | `0` | Consecutive losses before triggering a cooldown pause. `0` = disabled |
+| `loss_cooldown_secs` | `300` | Seconds to pause after hitting `max_consecutive_losses` |
+
+#### `[ledger]`
+
+| Key | Default | Description |
+|---|---|---|
+| `retention_days` | `90` | Days to keep closed trade entries before pruning on startup. `0` = never prune |
 
 ### Wallet Type
 
@@ -240,12 +294,10 @@ On first run with an empty or placeholder `.env`, the setup wizard prompts for:
 1. Private key (hidden input)
 2. Funder address
 3. Target wallet addresses
-4. Sizing mode (menu: `self_pct` / `target_usd` / `fixed`)
-5. `COPY_SIZE_PCT` only if `self_pct` was chosen (default 15%)
-6. Slippage, trade size, delay, loss threshold, and gain threshold limits
 
-All values are saved to `.env` and reused on subsequent runs.
-Press **`[s]`** inside the TUI at any time to re-run the wizard and update settings.
+After saving `.env`, `config.toml` is auto-generated (or migrated from any legacy `.env` values).
+Press **`[s]`** inside the TUI at any time to open the in-TUI settings editor where all 15 tunables
+are editable with arrow keys and are saved to `config.toml` on `[s]`.
 
 ### Logging
 
@@ -296,18 +348,20 @@ the ratatui TUI.
 rustup target add x86_64-unknown-linux-musl
 cargo build --release --target x86_64-unknown-linux-musl
 
-# 2. Copy binary + deploy files + your configured .env to the server
+# 2. Copy binary + deploy files + your configured .env and config.toml to the server
 scp target/x86_64-unknown-linux-musl/release/polycopier  user@server:/tmp/
 scp deploy/polycopier.service deploy/install.sh           user@server:/tmp/deploy/
-scp .env                                                   user@server:/tmp/
+scp .env config.toml                                      user@server:/tmp/
 
 # 3. On the server: install (creates system user, registers service)
 sudo /tmp/deploy/install.sh /tmp/polycopier
 
-# 4. Copy your pre-configured .env into place
+# 4. Copy your pre-configured .env and config.toml into place
 sudo cp /tmp/.env /opt/polycopier/.env
-sudo chown polycopier:polycopier /opt/polycopier/.env
-sudo chmod 600 /opt/polycopier/.env
+sudo cp /tmp/config.toml /opt/polycopier/config.toml
+sudo chown polycopier:polycopier /opt/polycopier/.env /opt/polycopier/config.toml
+sudo chmod 600 /opt/polycopier/.env  # secrets
+sudo chmod 644 /opt/polycopier/config.toml  # tunables -- no secrets
 
 # 5. Start the daemon
 sudo systemctl start polycopier
@@ -398,7 +452,8 @@ main.rs
   +-- strategy.rs         Receives TradeEvents, queries live API + ledger for intent,
   |                        applies risk checks, submits orders via OrderSubmitter
   |
-  +-- risk.rs             RiskEngine: minimum notional, max size enforcement
+  +-- risk.rs             RiskEngine: micro-trade filter, daily volume cap,
+  |                        consecutive-loss circuit breaker, rapid-flip guard (60s per token)
   |
   +-- state.rs            Shared BotState (Arc<RwLock<_>>): balance, our positions,
   |                        target positions, live feed, TUI counters, refresh timestamps
@@ -411,6 +466,7 @@ main.rs
   |
   +-- models.rs           Core types: TradeEvent, EvaluatedTrade, TargetPosition
   |                        (including source_wallet), ScanStatus, SizingMode
+  +-- backoff.rs          Exponential backoff helper (used by listener, scanner, wallet_sync)
   +-- utils.rs            Timestamp formatting helpers
   |
   +-- deploy/
@@ -463,12 +519,14 @@ Polymarket Data API
 The scanner fetches the target's full open portfolio and evaluates each position in order.
 A position is skipped at the first failing guard:
 
-1. **Already held** - the bot already holds this token (`SkippedOwned`)
-2. **Already queued** - an entry order was sent this session (`Entered`)
-3. **Price range** - current price must be between `$0.02` and `$0.95` (`SkippedPrice`)
-4. **Loss threshold** - the target's unrealized loss must be less than `MAX_COPY_LOSS_PCT` (`SkippedLoss`)
+1. **Resolved / expired** — `redeemable=true` (market settled on-chain) or `end_date` is strictly before today (`end_date < today`). Same-day markets (`end_date == today`) are **not** blocked when `redeemable=false` — they are still open and accepting orders. Resolution state comes from the `redeemable` flag, not the date.
+2. **Already held** — the bot already holds this token (`SkippedOwned`)
+3. **Already queued** — an entry order was sent this session (`Entered`)
+4. **Price range** — current price must be between `MIN_ENTRY_PRICE` and `MAX_ENTRY_PRICE` (`SkippedPrice`)
+5. **Loss threshold** — the target's unrealized loss must be less than `MAX_COPY_LOSS_PCT` (`SkippedLoss`)
+6. **Gain threshold** — the target's unrealized gain must be less than `MAX_COPY_GAIN_PCT` (`SkippedGain`)
 
-Positions passing all guards are classified as `Monitoring` (green in TUI) and an entry is queued.
+Positions passing all guards are classified as `Monitoring` (green in TUI) and up to `SCAN_MAX_ENTRIES_PER_CYCLE` entries are queued per cycle (default 1).
 
 ### Catch-up Intervals
 
@@ -491,7 +549,7 @@ The scanner reschedules itself after each cycle based on the best available oppo
 # Run with live reloading (requires cargo-watch)
 cargo watch -x run
 
-# Run the full test suite (121 tests, no network required)
+# Run the full test suite (267 tests, no network required)
 cargo test --all
 
 # Run only the copy ledger tests
@@ -511,8 +569,12 @@ cargo fmt
 
 | File | What it covers |
 |---|---|
-| `tests/copy_ledger_tests.rs` | `CopyLedger` — CRUD, source-wallet specificity, reconcile, disk round-trip, in-memory mode |
-| `tests/integration.rs` | Strategy engine: intent classification (ledger-aware + live-API fallback), one-position-per-token, SELL gating by source wallet, risk guards, slippage, deduplication |
+| `tests/copy_ledger_tests.rs` | `CopyLedger` — CRUD, source-wallet specificity, reconcile, disk round-trip, in-memory mode, atomic write, partial fill tracking, pruning, sweep source-wallet lookup |
+| `tests/integration.rs` | Strategy engine: intent classification, one-position-per-token, SELL gating, risk guards, slippage, deduplication; scanner sort, sell fee buffer, scan_max_entries, unrealized PnL |
+| `tests/backoff_tests.rs` | `next_backoff` — base interval, doubling, cap, overflow safety |
+| `tests/listener_tests.rs` | Dedup ring-buffer eviction; `try_send` backpressure semantics |
+| `tests/risk_tests.rs` | `RiskEngine` — daily volume limit, consecutive-loss circuit breaker, rapid-flip guard, anti-spoofing |
+| `tests/order_watcher_tests.rs` | Cancel-decision predicate; wallet_sync position upsert/remove rules; expiry alignment (`< today` for scanner and watcher) |
 | `tests/sizing_tests.rs` | `compute_order_usd` for all four sizing modes + floor/cap guards |
 | `tests/copied_counter_tests.rs` | `count_intersection` pure function: empty, full, partial, no overlap, multi-target |
 | `src/ui.rs` (`settings_tests`) | In-TUI settings editor: field change detection, key navigation, edit lifecycle, `.env` output |
