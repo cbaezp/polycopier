@@ -12,17 +12,17 @@
 //! | `start_balance_poll`  | 10 s     | `state.total_balance`                   |
 
 use crate::clients::{AuthedClobClient, BalanceFetcher};
-use crate::models::Position;
+use crate::models::{Position, TradeEvent, TradeSide};
 use crate::state::BotState;
 use alloy::primitives::Address;
 use polymarket_client_sdk::clob::types::request::OrdersRequest;
 use polymarket_client_sdk::data::types::request::PositionsRequest;
 use polymarket_client_sdk::data::Client as DataClient;
 use rust_decimal::Decimal;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 
 type State = Arc<RwLock<BotState>>;
 
@@ -185,6 +185,118 @@ pub fn start_balance_poll(balance_fetcher: BalanceFetcher, state: State) {
                 Err(e) => tracing::warn!("Balance fetch failed: {}", e),
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 5. Position-close sweep — runs every 60 s, compares our held positions
+//    against target wallet positions via the Data API.  For every token WE
+//    hold that NO target still holds, a synthetic SELL event is emitted so
+//    the strategy engine closes our position.
+//
+//    This is a backstop for the two failure modes that can cause us to miss
+//    a WS-delivered SELL event:
+//      - Bug A (now fixed): checksum/lowercase address mismatch drops the event
+//      - Bug B (now fixed): scanner race clears target_holds before event arrives
+//    Even if both fixes are in place, the sweep provides defense-in-depth.
+//
+//    The sweep event uses the first configured target wallet as `taker_address`
+//    so it clears the wallet check in strategy.rs (which is a Vec::contains on
+//    config.target_wallets).  Strategy uses our HELD size (from state.positions),
+//    not the event size, for the actual SELL order, so the synthetic size field
+//    is only used for the risk-engine $1 minimum check.
+// ---------------------------------------------------------------------------
+pub fn start_position_close_sweep(
+    target_wallets: Vec<String>,
+    state: Arc<RwLock<BotState>>,
+    tx: mpsc::Sender<TradeEvent>,
+) {
+    // We need at least one target wallet address to pass the wallet check in
+    // strategy.rs.  If there are none the sweep cannot function safely.
+    let Some(first_target) = target_wallets.first().cloned() else {
+        tracing::warn!("Position close sweep: no target wallets configured — sweep disabled.");
+        return;
+    };
+
+    tokio::spawn(async move {
+        let client = DataClient::default();
+        // Wait 60 s on first run so boot-time seeding and position sync
+        // have a chance to populate state before we start comparing.
+        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+
+        loop {
+            // Snapshot the positions we currently hold.
+            let our_positions: Vec<Position> = {
+                let guard = state.read().await;
+                guard.positions.values().cloned().collect()
+            };
+
+            if !our_positions.is_empty() {
+                // Fetch all token IDs held by any target wallet (union).
+                let mut target_tokens: HashSet<String> = HashSet::new();
+                for wallet_str in &target_wallets {
+                    let w = wallet_str.trim();
+                    if w.is_empty() {
+                        continue;
+                    }
+                    if let Ok(addr) = Address::from_str(w) {
+                        let req = PositionsRequest::builder().user(addr).build();
+                        match client.positions(&req).await {
+                            Ok(ps) => {
+                                for p in ps {
+                                    target_tokens.insert(p.asset.to_string());
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Position sweep: failed to fetch {}: {}", w, e);
+                            }
+                        }
+                    }
+                }
+
+                // For each position we hold, if no target still holds it → close.
+                for pos in &our_positions {
+                    if target_tokens.contains(&pos.token_id) {
+                        continue; // Target still holds it — nothing to do.
+                    }
+
+                    let short_id = &pos.token_id[..pos.token_id.len().min(12)];
+                    tracing::warn!(
+                        "Position sweep: no target holds token {} (our size={:.2}) \
+                         — emitting synthetic SELL to close our position.",
+                        short_id,
+                        pos.size,
+                    );
+
+                    // Build a synthetic SELL event.
+                    // taker_address = first target wallet so the wallet check in
+                    // strategy.rs (Vec::contains on config.target_wallets) passes.
+                    // strategy.rs reads our ACTUAL held size from state.positions,
+                    // so the event.size here is only used for the risk-engine
+                    // spoofing check (must be > $1 notional).
+                    let event = TradeEvent {
+                        transaction_hash: format!(
+                            "sweep_{}",
+                            &pos.token_id[..pos.token_id.len().min(12)]
+                        ),
+                        maker_address: first_target.clone(),
+                        taker_address: first_target.clone(),
+                        token_id: pos.token_id.clone(),
+                        price: pos.average_entry_price,
+                        size: pos.size,
+                        side: TradeSide::SELL,
+                        timestamp: chrono::Utc::now().timestamp(),
+                    };
+
+                    if let Err(e) = tx.send(event).await {
+                        tracing::warn!("Position sweep: channel closed — stopping: {}", e);
+                        return;
+                    }
+                }
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
         }
     });
 }

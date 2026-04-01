@@ -35,20 +35,28 @@ their trades into your own account in real time.
    target position's current price is to their original entry - scanning most aggressively
    when a catch-up entry is still at a favorable price.
 
-**Trade intent classification** - the bot tracks the target's current positions (via the
-scanner data) and uses them to classify every event before acting:
+**Trade intent classification** — every event is verified against:
+1. The **copy ledger** (`copy_ledger.json`) — a persistent record of which target we copied each token from.
+2. A **live Polymarket API call** at decision time — our wallet and the target wallet are both queried in parallel (5 s timeout, falls back to scanner cache if the API is slow).
 
-| Target has position? | Event | Bot has position? | Intent | Action |
+This gives the engine authoritative, race-proof answers:
+
+| Live: we hold? | Live: target holds? | Ledger entry? | Event | Decision |
 |---|---|---|---|---|
-| No | BUY | No | Fresh long entry | Copy BUY |
-| Yes | BUY | Any | Adding to long | Copy BUY |
-| No | BUY | Yes | Closing a short | **Skip** |
-| Yes | SELL | Yes | Closing long | Copy SELL |
-| Yes | SELL | No | Closing long we missed | **Skip** |
-| No | SELL | Any | Opening a short | **Skip** |
+| No | No | None | BUY | **Copy** — fresh long entry |
+| No | Yes | None | BUY | **Copy** — fresh long entry |
+| Yes | Any | token X from A | BUY | **Skip** — one-position-per-token rule |
+| Yes | No | None | BUY | **Skip** — target closing short we never entered |
+| Yes | Any | token X from **A** | SELL from **A** | **Close** — correct source |
+| Yes | Any | token X from **A** | SELL from **B** | **Skip** — irrelevant; hold for A |
+| Yes | Any | None (orphan) | SELL | **Defensive close** — ledger lost, close to be safe |
+| No | Any | open entry | SELL | **Skip + sync ledger** — position already closed while bot was down |
+| No | Yes | None | SELL | **Skip** — closing long we never entered |
+| No | No | None | SELL | **Skip** — target opening short (not supported) |
 
-The bot **never exits a position autonomously**. All exits are triggered only when the
-target wallet closes their position.
+The bot **never enters the same token from two different targets.** The first target to enter
+a token "owns" it in the ledger; all subsequent entries for that token from other targets
+are ignored until the position is fully closed.
 
 The entire interface is a terminal UI (TUI) with no browser required.
 The bot can also run **headless** (no TUI) as a systemd daemon on a Linux server.
@@ -382,8 +390,13 @@ main.rs
   |
   +-- copied_counter.rs   API-based Copied counter (our wallet x target wallets, 30s)
   |
-  +-- strategy.rs         Receives TradeEvents, classifies intent, applies risk checks,
-  |                        submits orders via OrderSubmitter
+  +-- copy_ledger.rs      Persistent copy ledger (copy_ledger.json):
+  |                        - records which target wallet each position was copied from
+  |                        - enforces one-position-per-token rule
+  |                        - survives restarts; reconciled against live wallet on boot
+  |
+  +-- strategy.rs         Receives TradeEvents, queries live API + ledger for intent,
+  |                        applies risk checks, submits orders via OrderSubmitter
   |
   +-- risk.rs             RiskEngine: minimum notional, max size enforcement
   |
@@ -439,6 +452,7 @@ Polymarket Data API
 | Prices in Copied table (CUR PRICE, OUR PNL%) | 20s | price refresh |
 | Copied count (header) | 30s | copied_counter |
 | Full target portfolio (scanner table, entry classification) | 10-60s adaptive | position_scanner |
+| **Live position verification (our wallet + target wallet)** | **per trade event** | **strategy engine** |
 | TUI render | 250ms | event loop |
 
 
@@ -477,8 +491,14 @@ The scanner reschedules itself after each cycle based on the best available oppo
 # Run with live reloading (requires cargo-watch)
 cargo watch -x run
 
-# Run the full test suite (149 tests, all pure/unit - no network)
+# Run the full test suite (121 tests, no network required)
 cargo test --all
+
+# Run only the copy ledger tests
+cargo test --test copy_ledger_tests
+
+# Run the live API test (requires internet)
+cargo test --test integration live_holds_query_reaches_api -- --ignored
 
 # Lint
 cargo clippy --all-targets -- -D warnings
@@ -491,7 +511,8 @@ cargo fmt
 
 | File | What it covers |
 |---|---|
-| `tests/integration.rs` | Strategy engine: intent classification, risk guards, SELL guards, slippage, deduplication |
+| `tests/copy_ledger_tests.rs` | `CopyLedger` — CRUD, source-wallet specificity, reconcile, disk round-trip, in-memory mode |
+| `tests/integration.rs` | Strategy engine: intent classification (ledger-aware + live-API fallback), one-position-per-token, SELL gating by source wallet, risk guards, slippage, deduplication |
 | `tests/sizing_tests.rs` | `compute_order_usd` for all four sizing modes + floor/cap guards |
 | `tests/copied_counter_tests.rs` | `count_intersection` pure function: empty, full, partial, no overlap, multi-target |
 | `src/ui.rs` (`settings_tests`) | In-TUI settings editor: field change detection, key navigation, edit lifecycle, `.env` output |

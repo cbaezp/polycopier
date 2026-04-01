@@ -2,6 +2,7 @@
 pub mod clients;
 pub mod config;
 pub mod copied_counter;
+pub mod copy_ledger;
 pub mod listener;
 pub mod log_capture;
 pub mod models;

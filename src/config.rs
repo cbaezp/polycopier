@@ -237,7 +237,10 @@ impl Config {
 
         let target_wallets: Vec<String> = target_wallets_str
             .split(',')
-            .map(|s| s.trim().to_string())
+            // Normalize to lowercase to match listener.rs normalization.
+            // alloy Address::to_string() = EIP-55 mixed-case; we lowercase both
+            // sides so Vec::contains works correctly in strategy.rs.
+            .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty())
             .collect();
 
@@ -477,7 +480,7 @@ impl Config {
 
         let target_wallets: Vec<String> = target_wallets_str
             .split(',')
-            .map(|s| s.trim().to_string())
+            .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty())
             .collect();
 

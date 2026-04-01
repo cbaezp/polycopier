@@ -70,8 +70,12 @@ pub async fn start_ws_listener(config: &Config, tx: mpsc::Sender<TradeEvent>) ->
 
                         let event = TradeEvent {
                             transaction_hash: hash.clone(),
-                            maker_address: trade.proxy_wallet.to_string(),
-                            taker_address: trade.proxy_wallet.to_string(),
+                            // Normalize to lowercase: alloy Address::to_string() produces
+                            // EIP-55 checksum (mixed-case). config.target_wallets stores
+                            // lowercase strings from .env. Vec::contains is case-sensitive,
+                            // so without normalization every live trade fails the wallet check.
+                            maker_address: trade.proxy_wallet.to_string().to_lowercase(),
+                            taker_address: trade.proxy_wallet.to_string().to_lowercase(),
                             token_id: trade.asset.to_string(),
                             price: trade.price,
                             size: trade.size,

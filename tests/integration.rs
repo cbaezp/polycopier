@@ -900,12 +900,16 @@ mod scanner_avg_price_tests {
 mod strategy_engine_tests {
     use super::*;
     use polycopier::clients::OrderSubmitter;
-    use polycopier::strategy::start_strategy_engine;
+    use polycopier::copy_ledger::CopyLedger;
+    use polycopier::strategy::{make_no_op_holds_query, start_strategy_engine};
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use tokio::sync::{mpsc, RwLock};
 
+    fn test_ledger() -> Arc<tokio::sync::Mutex<CopyLedger>> {
+        Arc::new(tokio::sync::Mutex::new(CopyLedger::default()))
+    }
     fn mock_submitter(log: Arc<Mutex<Vec<OrderRequest>>>) -> OrderSubmitter {
         Arc::new(move |order: OrderRequest| {
             let log = log.clone();
@@ -946,6 +950,8 @@ mod strategy_engine_tests {
             risk,
             mock_submitter(log.clone()),
             config.clone(),
+            test_ledger(),
+            make_no_op_holds_query(),
         );
 
         // Seed sufficient balance so the pre-check doesn't block submission
@@ -972,7 +978,15 @@ mod strategy_engine_tests {
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
-        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config,
+            test_ledger(),
+            make_no_op_holds_query(),
+        );
 
         tx.send(make_trade(
             "0xunknown",
@@ -997,7 +1011,15 @@ mod strategy_engine_tests {
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
-        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config,
+            test_ledger(),
+            make_no_op_holds_query(),
+        );
 
         // Seed sufficient balance so the pre-check doesn't block submission
         {
@@ -1023,7 +1045,15 @@ mod strategy_engine_tests {
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
-        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config,
+            test_ledger(),
+            make_no_op_holds_query(),
+        );
 
         // $0.05 * 0.01 = $0.0005 - below $1 spoofing threshold
         tx.send(make_trade("0xabc", dec!(0.05), dec!(0.01), TradeSide::BUY))
@@ -1053,7 +1083,15 @@ mod strategy_engine_tests {
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
-        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config,
+            test_ledger(),
+            make_no_op_holds_query(),
+        );
 
         // SELL: 0.60 - (0.60 * 0.02) = 0.588
         tx.send(make_trade("0xabc", dec!(0.60), dec!(5), TradeSide::SELL))
@@ -1092,6 +1130,8 @@ mod strategy_engine_tests {
             risk,
             mock_submitter(log.clone()),
             config.clone(),
+            test_ledger(),
+            make_no_op_holds_query(),
         );
 
         // Target sells 500 shares - we hold only 20
@@ -1133,6 +1173,8 @@ mod strategy_engine_tests {
             risk,
             mock_submitter(log.clone()),
             config.clone(),
+            test_ledger(),
+            make_no_op_holds_query(),
         );
 
         tx.send(make_trade("0xabc", dec!(0.60), dec!(10), TradeSide::SELL))
@@ -1162,6 +1204,8 @@ mod strategy_engine_tests {
             risk,
             mock_submitter(log.clone()),
             config.clone(),
+            test_ledger(),
+            make_no_op_holds_query(),
         );
 
         tx.send(make_trade("0xabc", dec!(0.50), dec!(100), TradeSide::SELL))
@@ -1196,6 +1240,8 @@ mod strategy_engine_tests {
             risk,
             mock_submitter(log.clone()),
             config.clone(),
+            test_ledger(),
+            make_no_op_holds_query(),
         );
 
         // Target sells "99999" but has no prior long position -> short entry
@@ -1239,6 +1285,8 @@ mod strategy_engine_tests {
             risk,
             mock_submitter(log.clone()),
             config.clone(),
+            test_ledger(),
+            make_no_op_holds_query(),
         );
 
         tx.send(make_trade("0xabc", dec!(0.50), dec!(10), TradeSide::BUY))
@@ -1273,7 +1321,15 @@ mod strategy_engine_tests {
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
-        start_strategy_engine(rx, state.clone(), risk, mock_submitter(log.clone()), config);
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config,
+            test_ledger(),
+            make_no_op_holds_query(),
+        );
 
         tx.send(make_trade("0xabc", dec!(0.60), dec!(3), TradeSide::SELL))
             .await
@@ -1289,6 +1345,235 @@ mod strategy_engine_tests {
         assert!(
             orders[0].size < dec!(15),
             "sell size must be < held position"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Ledger-aware tests — these exercise the new copy_ledger + intent logic
+    // -----------------------------------------------------------------------
+
+    /// BUY is skipped when the ledger already shows an active copy for that
+    /// token, regardless of which target is now trying to BUY it (one-position-
+    /// per-token rule).
+    #[tokio::test]
+    async fn buy_skipped_when_ledger_already_holds_token() {
+        let config = test_config();
+        let mut init_state = BotState::new();
+        init_state.total_balance = dec!(100);
+        // Pre-seed our position
+        init_state.positions.insert(
+            "99999".to_string(),
+            Position {
+                token_id: "99999".into(),
+                size: dec!(10),
+                average_entry_price: dec!(0.50),
+            },
+        );
+        let state = Arc::new(RwLock::new(init_state));
+        let risk = RiskEngine::new(config.clone());
+        let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = mpsc::channel::<TradeEvent>(10);
+
+        // Pre-populate ledger: we already copied token 99999 from 0xabc
+        let ledger = Arc::new(tokio::sync::Mutex::new({
+            let mut l = CopyLedger::new_in_memory();
+            l.record_copy("99999".into(), "0xabc".into(), dec!(10), dec!(0.50));
+            l
+        }));
+
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config,
+            ledger,
+            make_no_op_holds_query(),
+        );
+
+        // Second target (0xabc again, or any other) tries to BUY same token
+        tx.send(make_trade("0xabc", dec!(0.55), dec!(20), TradeSide::BUY))
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        // Must be skipped — one-position-per-token
+        let order_count = log.lock().unwrap().len();
+        assert_eq!(
+            order_count, 0,
+            "BUY should be skipped when token already in ledger"
+        );
+        let guard = state.read().await;
+        assert_eq!(guard.trades_skipped, 1);
+    }
+
+    /// A SELL from the CORRECT source wallet (the one we copied from) triggers
+    /// a close when the ledger has a matching active entry.
+    #[tokio::test]
+    async fn sell_executes_when_source_wallet_matches_ledger() {
+        let config = test_config();
+        let mut init_state = BotState::new();
+        init_state.total_balance = dec!(100);
+        init_state.positions.insert(
+            "99999".to_string(),
+            Position {
+                token_id: "99999".into(),
+                size: dec!(10),
+                average_entry_price: dec!(0.50),
+            },
+        );
+        let state = Arc::new(RwLock::new(init_state));
+        let risk = RiskEngine::new(config.clone());
+        let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = mpsc::channel::<TradeEvent>(10);
+
+        let ledger = Arc::new(tokio::sync::Mutex::new({
+            let mut l = CopyLedger::new_in_memory();
+            l.record_copy("99999".into(), "0xabc".into(), dec!(10), dec!(0.50));
+            l
+        }));
+
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config,
+            ledger,
+            make_no_op_holds_query(),
+        );
+
+        // 0xabc (our copy source) sells → should trigger close
+        tx.send(make_trade("0xabc", dec!(0.60), dec!(10), TradeSide::SELL))
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let orders = log.lock().unwrap();
+        assert_eq!(orders.len(), 1, "SELL from copy source should execute");
+        assert_eq!(orders[0].side, TradeSide::SELL);
+    }
+
+    /// A SELL from a DIFFERENT target wallet (not the one we copied from) is
+    /// ignored — we keep holding for the target we actually copied from.
+    #[tokio::test]
+    async fn sell_skipped_when_source_wallet_does_not_match_ledger() {
+        // Two targets in config: 0xabc and 0xdef
+        let mut config = test_config();
+        config.target_wallets.push("0xdef".to_string());
+
+        let mut init_state = BotState::new();
+        init_state.positions.insert(
+            "99999".to_string(),
+            Position {
+                token_id: "99999".into(),
+                size: dec!(10),
+                average_entry_price: dec!(0.50),
+            },
+        );
+        let state = Arc::new(RwLock::new(init_state));
+        let risk = RiskEngine::new(config.clone());
+        let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = mpsc::channel::<TradeEvent>(10);
+
+        // Ledger: we copied from 0xabc
+        let ledger = Arc::new(tokio::sync::Mutex::new({
+            let mut l = CopyLedger::new_in_memory();
+            l.record_copy("99999".into(), "0xabc".into(), dec!(10), dec!(0.50));
+            l
+        }));
+
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config,
+            ledger,
+            make_no_op_holds_query(),
+        );
+
+        // 0xdef (NOT our copy source) sells — must be ignored
+        tx.send(make_trade("0xdef", dec!(0.55), dec!(10), TradeSide::SELL))
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let order_count = log.lock().unwrap().len();
+        assert_eq!(order_count, 0, "SELL from wrong wallet must be skipped");
+        let guard = state.read().await;
+        assert_eq!(guard.trades_skipped, 1);
+    }
+
+    /// If we hold a position but there is NO ledger entry (e.g., ledger was
+    /// lost after a restart), the engine closes defensively on ANY target SELL.
+    #[tokio::test]
+    async fn sell_closes_defensively_when_no_ledger_entry() {
+        let config = test_config();
+        let mut init_state = BotState::new();
+        init_state.positions.insert(
+            "99999".to_string(),
+            Position {
+                token_id: "99999".into(),
+                size: dec!(10),
+                average_entry_price: dec!(0.50),
+            },
+        );
+        let state = Arc::new(RwLock::new(init_state));
+        let risk = RiskEngine::new(config.clone());
+        let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = mpsc::channel::<TradeEvent>(10);
+
+        // Empty ledger — as if the bot restarted and ledger was wiped
+        let ledger = test_ledger();
+
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            risk,
+            mock_submitter(log.clone()),
+            config,
+            ledger,
+            make_no_op_holds_query(),
+        );
+
+        tx.send(make_trade("0xabc", dec!(0.60), dec!(10), TradeSide::SELL))
+            .await
+            .unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let orders = log.lock().unwrap();
+        assert_eq!(
+            orders.len(),
+            1,
+            "Defensive close: should execute even with no ledger entry"
+        );
+    }
+
+    // -- Live API integration test (network required) -----------------------
+    // These tests are marked #[ignore] so they only run when explicitly
+    // requested: `cargo test --test integration live_ -- --ignored`
+
+    /// Sanity-check that the live HoldsQuery actually reaches the Polymarket
+    /// Data API and returns a result (not None).  Uses a known public wallet.
+    ///
+    /// Run with: cargo test --test integration live_holds_query_reaches_api -- --ignored
+    #[tokio::test]
+    #[ignore = "requires live internet access to Polymarket Data API"]
+    async fn live_holds_query_reaches_api() {
+        use polycopier::strategy::make_live_holds_query;
+        let query = make_live_holds_query();
+
+        // Use a well-known Polymarket address that has historical activity.
+        // We don't know if it holds a specific token right now, but the API
+        // should at least respond (not timeout → Some(x) rather than None).
+        let known_wallet = "0x0000000000000000000000000000000000000000".to_string();
+        let dummy_token = "1".to_string(); // valid but unlikely to be held
+
+        let result = query(known_wallet.clone(), dummy_token).await;
+        assert!(
+            result.is_some(),
+            "Live API should return Some(true/false), not None (which means timeout/error)"
         );
     }
 }

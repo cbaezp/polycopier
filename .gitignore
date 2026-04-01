@@ -6,9 +6,12 @@
 .env.local
 .env.production
 
-# Runtime logs
+# Runtime logs and data
 *.log
 bot.log
+
+# Persistent runtime state — auto-created on first trade, never commit
+copy_ledger.json
 
 # Editor / IDE
 .idea/
@@ -19,6 +22,6 @@ bot.log
 
 # Rust
 Cargo.lock
-
+.agents/
 
 src/bin/order_test.rs

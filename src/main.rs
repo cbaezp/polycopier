@@ -1,6 +1,7 @@
 pub mod clients;
 pub mod config;
 pub mod copied_counter;
+pub mod copy_ledger;
 pub mod listener;
 pub mod log_capture;
 pub mod models;
@@ -13,8 +14,9 @@ pub mod ui;
 pub mod utils;
 pub mod wallet_sync;
 
+use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing_subscriber::prelude::*;
 
 #[tokio::main]
@@ -83,12 +85,20 @@ async fn main() -> anyhow::Result<()> {
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(100);
     listener::start_ws_listener(&config, event_tx.clone()).await?;
 
+    // ── Copy ledger ───────────────────────────────────────────────────────────
+    // Load the persisted copy ledger.  This records which positions we entered
+    // and from which target wallet, enabling correct SELL classification and the
+    // one-position-per-token rule across restarts.
+    let copy_ledger = Arc::new(Mutex::new(copy_ledger::CopyLedger::load()));
+
     strategy::start_strategy_engine(
         event_rx,
         state.clone(),
         risk_engine,
         poly_submitter,
         config.clone(),
+        copy_ledger.clone(),
+        strategy::make_live_holds_query(),
     );
 
     // ── Background tasks ──────────────────────────────────────────────────────
@@ -98,13 +108,28 @@ async fn main() -> anyhow::Result<()> {
     wallet_sync::seed_own_positions(&config.funder_address, state.clone()).await;
     wallet_sync::seed_pending_orders(&clob, state.clone()).await;
 
+    // Reconcile the copy ledger against our live wallet positions.
+    // Any open ledger entry where we no longer hold the token is marked closed.
+    // This corrects for positions that were closed while the bot was offline.
+    {
+        let live_token_ids: HashSet<String> = {
+            let guard = state.read().await;
+            guard.positions.keys().cloned().collect()
+        };
+        copy_ledger.lock().await.reconcile(&live_token_ids);
+    }
+
     // Ongoing wallet sync (positions, prices, balance) — all fire-and-forget loops.
     wallet_sync::start_position_sync(config.funder_address.clone(), state.clone());
     wallet_sync::start_price_refresh(config.target_wallets.clone(), state.clone());
     wallet_sync::start_balance_poll(balance_fetcher, state.clone());
 
     // Position scanner — safe to start now; seed has completed.
-    position_scanner::start_position_scanner(config.clone(), state.clone(), event_tx);
+    position_scanner::start_position_scanner(config.clone(), state.clone(), event_tx.clone());
+
+    // Position-close sweep — backstop that emits synthetic SELLs for any
+    // position we hold that no target still holds (catches missed WS SELL events).
+    wallet_sync::start_position_close_sweep(config.target_wallets.clone(), state.clone(), event_tx);
 
     // Copied counter (header "Copied: N" — live API intersection every 30 s)
     copied_counter::start_copied_counter(

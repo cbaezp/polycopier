@@ -1,12 +1,20 @@
 use crate::clients::OrderSubmitter;
 use crate::config::Config;
+use crate::copy_ledger::CopyLedger;
 use crate::models::{EvaluatedTrade, OrderRequest, SizingMode, TradeEvent, TradeSide};
 use crate::risk::RiskEngine;
 use crate::state::BotState;
+use alloy::primitives::Address;
+use polymarket_client_sdk::data::types::request::PositionsRequest;
+use polymarket_client_sdk::data::Client as DataClient;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
 // -- Pure helpers (extracted for testability) ----------------------------------
@@ -79,12 +87,65 @@ pub fn compute_order_usd(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Injectable live position checker
+// ---------------------------------------------------------------------------
+
+/// Returns `Some(true)` if `wallet` holds `token_id`, `Some(false)` if not,
+/// `None` on error or timeout.
+///
+/// Injected via [`start_strategy_engine`] so tests can provide a no-op
+/// without touching the real network.
+pub type HoldsQuery =
+    Arc<dyn Fn(String, String) -> Pin<Box<dyn Future<Output = Option<bool>> + Send>> + Send + Sync>;
+
+/// Production implementation — makes a live Polymarket Data API call with a
+/// 5-second timeout.
+pub fn make_live_holds_query() -> HoldsQuery {
+    Arc::new(|wallet: String, token_id: String| {
+        Box::pin(async move {
+            let client = DataClient::default();
+            let Ok(addr) = Address::from_str(&wallet) else {
+                return None;
+            };
+            let req = PositionsRequest::builder().user(addr).build();
+            match tokio::time::timeout(Duration::from_secs(5), client.positions(&req)).await {
+                Ok(Ok(positions)) => {
+                    Some(positions.iter().any(|p| p.asset.to_string() == token_id))
+                }
+                Ok(Err(e)) => {
+                    warn!(
+                        "Live position query failed for {}: {e}",
+                        &wallet[..wallet.len().min(10)]
+                    );
+                    None
+                }
+                Err(_) => {
+                    warn!(
+                        "Live position query timed out for {}",
+                        &wallet[..wallet.len().min(10)]
+                    );
+                    None
+                }
+            }
+        })
+    })
+}
+
+/// No-op implementation for use in integration tests.  Returns `None`
+/// immediately, triggering the scanner-cache fallback in the engine.
+pub fn make_no_op_holds_query() -> HoldsQuery {
+    Arc::new(|_wallet: String, _token_id: String| Box::pin(async { None::<bool> }))
+}
+
 pub fn start_strategy_engine(
     mut rx: mpsc::Receiver<TradeEvent>,
     state: Arc<RwLock<BotState>>,
     mut risk_engine: RiskEngine,
     submitter: OrderSubmitter,
     config: Config,
+    copy_ledger: Arc<Mutex<CopyLedger>>,
+    holds_query: HoldsQuery,
 ) {
     tokio::spawn(async move {
         info!("Strategy Engine Started. Monitoring edge cases (debouncing, closures...)");
@@ -137,64 +198,148 @@ pub fn start_strategy_engine(
                 }
             }
 
-            // -- Intent classification using target's scanner positions ----------
-            // The position scanner refreshes target_positions every 60 seconds.
-            // We use it to distinguish fresh entries from closures, and to detect
-            // short positions (SELL to open, BUY to close) that we cannot replicate.
+            // -- Intent classification: live API + copy ledger ------------------
+            //
+            // Rules:
+            //   ONE-POSITION-PER-TOKEN: once we hold a token (from any target),
+            //   ignore BUY events from all other targets for that token.
+            //
+            //   SELL gating: only the target we originally copied from can trigger
+            //   a close.  A SELL from a different target is irrelevant to our
+            //   position.
+            //
+            //   LIVE VERIFICATION: for BUY events we query the target's wallet live
+            //   (they should show the position after buying); for SELL events we
+            //   query OUR wallet live (authoritative — did we actually hold it?).
+            //   Both calls fall back to the scanner cache on API timeout/error.
             if eval.validated {
-                let (target_holds, we_hold) = {
+                // --- Resolve live state for this token ---
+
+                // Our position: query live (both calls run in parallel),
+                // falling back to the scanner cache on API timeout/error.
+                let cache_we_hold = {
                     let guard = state.read().await;
-                    let target = guard
-                        .target_positions
-                        .iter()
-                        .any(|p| p.token_id == event.token_id);
-                    let ours = guard.positions.contains_key(&event.token_id);
-                    (target, ours)
+                    guard.positions.contains_key(&event.token_id)
+                };
+                let cache_target_holds = {
+                    let guard = state.read().await;
+                    guard.target_positions.iter().any(|p| {
+                        p.token_id == event.token_id && p.source_wallet == event.taker_address
+                    })
                 };
 
-                // Only apply intent classification when scanner has populated data.
-                // If target_positions is empty the scanner hasn't run yet -- fall back
-                // to side-based logic (safe: SELLs still require us to hold the token).
-                let scanner_ready = {
-                    let guard = state.read().await;
-                    !guard.target_positions.is_empty()
-                };
+                // Run both live queries in parallel to minimise latency.
+                let (live_we_hold_opt, live_target_holds_opt) = tokio::join!(
+                    holds_query(config.funder_address.clone(), event.token_id.clone()),
+                    holds_query(event.taker_address.clone(), event.token_id.clone()),
+                );
+                let live_we_hold = live_we_hold_opt.unwrap_or(cache_we_hold);
+                let live_target_holds = live_target_holds_opt.unwrap_or(cache_target_holds);
 
-                let skip_reason: Option<&str> = if scanner_ready {
-                    match event.side {
-                        TradeSide::BUY => {
-                            if !target_holds && we_hold {
-                                // We're already long, target has no position ->
-                                // target is likely closing a short we never entered.
-                                Some("BUY skipped: we hold long but target has no position (short close)")
-                            } else {
-                                None // Fresh long entry or adding to long -> copy
-                            }
-                        }
-                        TradeSide::SELL => {
-                            if target_holds && we_hold {
-                                None // Target closing their long, we hold -> copy
-                            } else if target_holds && !we_hold {
-                                Some("SELL skipped: target closing long we never entered")
-                            } else {
-                                // !target_holds -> target opening a short (no prior long position)
-                                Some("SELL skipped: target opening short position (not supported)")
-                            }
+                // Ledger lookup for this token (who we copied it from, if anyone).
+                let ledger_entry = {
+                    let ledger = copy_ledger.lock().await;
+                    ledger.find_active_for_token(&event.token_id).cloned()
+                };
+                let already_in_token = ledger_entry.is_some();
+
+                let skip_reason: Option<String> = match event.side {
+                    // ---- BUY -----------------------------------------------
+                    TradeSide::BUY => {
+                        if already_in_token {
+                            // ONE-POSITION-PER-TOKEN: we already hold this via
+                            // another target (or via this same target's prior entry).
+                            let from = ledger_entry
+                                .as_ref()
+                                .map(|e| &e.source_wallet[..e.source_wallet.len().min(10)])
+                                .unwrap_or("unknown");
+                            Some(format!(
+                                "BUY skipped: already holding token {} (entered from {})",
+                                &event.token_id[..event.token_id.len().min(12)],
+                                from
+                            ))
+                        } else if !live_target_holds && live_we_hold {
+                            // Target has no position but we're long → target closing
+                            // their short; copying this BUY would incorrectly add to
+                            // our long.
+                            Some(
+                                "BUY skipped: we hold long but target has no position \
+                                 (likely closing their short)"
+                                    .to_string(),
+                            )
+                        } else {
+                            None // Fresh long entry → copy
                         }
                     }
-                } else {
-                    // Scanner not yet populated -- fall back to: only skip SELLs we don't hold
-                    if event.side == TradeSide::SELL && !we_hold {
-                        Some("SELL skipped: position not held (scanner warming up)")
-                    } else {
-                        None
+                    // ---- SELL ----------------------------------------------
+                    TradeSide::SELL => {
+                        if live_we_hold {
+                            // We hold this position.  Determine if the seller is the
+                            // target we copied it from.
+                            match &ledger_entry {
+                                Some(entry) if entry.source_wallet == event.taker_address => {
+                                    None // Correct source is selling → close
+                                }
+                                Some(entry) => {
+                                    // A *different* target is selling — their action
+                                    // is irrelevant to the position we copied from
+                                    // entry.source_wallet.  Keep holding.
+                                    Some(format!(
+                                        "SELL skipped: {} sold but we copied from {} — \
+                                         keeping position",
+                                        &event.taker_address[..event.taker_address.len().min(10)],
+                                        &entry.source_wallet[..entry.source_wallet.len().min(10)],
+                                    ))
+                                }
+                                None => {
+                                    // We hold it but have no ledger entry — either the
+                                    // ledger was lost or the position was entered manually.
+                                    // Defensive: close it when ANY target sells.
+                                    warn!(
+                                        "SELL: we hold token {} with no ledger entry — \
+                                         closing defensively.",
+                                        &event.token_id[..event.token_id.len().min(12)]
+                                    );
+                                    None
+                                }
+                            }
+                        } else if let Some(entry) = &ledger_entry {
+                            // Ledger says we had a copy but live API shows we don't hold it.
+                            // Position was closed while bot was down — sync ledger and skip.
+                            warn!(
+                                "SELL: ledger shows active copy of {} from {} but we no longer \
+                                 hold it — marking closed.",
+                                &event.token_id[..event.token_id.len().min(12)],
+                                &entry.source_wallet[..entry.source_wallet.len().min(10)],
+                            );
+                            let mut ledger = copy_ledger.lock().await;
+                            ledger.record_close(&event.token_id, &entry.source_wallet.clone());
+                            Some(
+                                "SELL skipped: position already closed (ledger synced)".to_string(),
+                            )
+                        } else {
+                            // We don't hold it and there's no ledger entry.
+                            // Target is either closing a long we never entered (bot
+                            // was down during entry) or opening a short.
+                            if live_target_holds {
+                                Some(
+                                    "SELL skipped: target closing long we never entered"
+                                        .to_string(),
+                                )
+                            } else {
+                                Some(
+                                    "SELL skipped: target opening short (not supported)"
+                                        .to_string(),
+                                )
+                            }
+                        }
                     }
                 };
 
                 if let Some(reason) = skip_reason {
                     warn!("{}", reason);
                     eval.validated = false;
-                    eval.reason = Some(reason.to_string());
+                    eval.reason = Some(reason);
                 }
             }
 
@@ -303,15 +448,50 @@ pub fn start_strategy_engine(
                         let mut guard = state.write().await;
                         guard.pending_order_tokens.insert(order.token_id.clone());
                     }
+
                     let submitter_clone = submitter.clone();
                     let state_clone = state.clone();
                     let token_id_clone = order.token_id.clone();
+                    let source_wallet_clone = event.taker_address.clone();
+                    let is_closing = event.side == TradeSide::SELL;
+                    let order_size = order.size;
+                    let order_price = order.price;
+                    let ledger_clone = copy_ledger.clone();
+
                     tokio::spawn(async move {
-                        if let Err(e) = submitter_clone(order).await {
-                            // Remove from pending on failure so the order can be retried
-                            let mut guard = state_clone.write().await;
-                            guard.pending_order_tokens.remove(&token_id_clone);
-                            tracing::error!("Execution failed: {}", e);
+                        match submitter_clone(order).await {
+                            Ok(()) => {
+                                // Record in the copy ledger so subsequent events for this
+                                // token are classified correctly (source wallet tracking,
+                                // one-position-per-token rule, SELL gating).
+                                let mut ledger = ledger_clone.lock().await;
+                                if is_closing {
+                                    ledger.record_close(&token_id_clone, &source_wallet_clone);
+                                    info!(
+                                        "Ledger: closed {} from {}",
+                                        &token_id_clone[..token_id_clone.len().min(12)],
+                                        &source_wallet_clone[..source_wallet_clone.len().min(10)],
+                                    );
+                                } else {
+                                    ledger.record_copy(
+                                        token_id_clone.clone(),
+                                        source_wallet_clone.clone(),
+                                        order_size,
+                                        order_price,
+                                    );
+                                    info!(
+                                        "Ledger: recorded copy of {} from {}",
+                                        &token_id_clone[..token_id_clone.len().min(12)],
+                                        &source_wallet_clone[..source_wallet_clone.len().min(10)],
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                // Remove from pending on failure so the order can be retried.
+                                let mut guard = state_clone.write().await;
+                                guard.pending_order_tokens.remove(&token_id_clone);
+                                tracing::error!("Execution failed: {}", e);
+                            }
                         }
                     });
                 }
