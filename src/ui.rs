@@ -803,8 +803,8 @@ fn render_scanner(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
             let pnl_pct = pos.percent_pnl * Decimal::from(100);
             let pnl_str = format!("{:+.1}%", pnl_pct);
             let market = format!("{} ({})", pos.title, pos.outcome);
-            let market_trunc = if market.len() > 44 {
-                format!("{}...", &market[..44])
+            let market_trunc = if market.chars().count() > 44 {
+                format!("{}...", market.chars().take(44).collect::<String>())
             } else {
                 market.clone()
             };

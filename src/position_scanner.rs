@@ -270,8 +270,8 @@ async fn scan_positions(
                 to_enter.push((token_id.clone(), event));
             }
 
-            let title = if pos.title.len() > 45 {
-                format!("{}...", &pos.title[..45])
+            let title = if pos.title.chars().count() > 45 {
+                format!("{}...", pos.title.chars().take(45).collect::<String>())
             } else {
                 pos.title.clone()
             };
