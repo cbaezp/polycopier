@@ -1,3 +1,4 @@
+use crate::backoff::next_backoff;
 use crate::config::Config;
 use crate::models::{ScanStatus, TargetPosition, TradeEvent, TradeSide};
 use crate::state::BotState;
@@ -91,28 +92,52 @@ pub fn start_position_scanner(
             g.last_scan_at = Some(std::time::Instant::now());
         }
 
+        // Gap 6: track consecutive scan failures for exponential backoff.
+        let mut consecutive_errors: u32 = 0;
+
         loop {
             // Compute next sleep based on how enterable the target's open positions still are.
             let interval_secs = {
                 let guard = state.read().await;
                 compute_scan_interval(&guard.target_positions, config.max_copy_loss_pct)
             };
+
+            // Apply backoff on top of normal interval if API is misbehaving.
+            let sleep_secs = if consecutive_errors > 0 {
+                let backoff = next_backoff(consecutive_errors, interval_secs, 300);
+                warn!(
+                    "Scanner: backing off {}s after {} consecutive scan errors.",
+                    backoff, consecutive_errors
+                );
+                backoff
+            } else {
+                interval_secs
+            };
+
             debug!(
                 "Next position scan in {}s (catch-up urgency: target entry proximity)",
-                interval_secs
+                sleep_secs
             );
             // Record the scheduled interval so the TUI can show a countdown
             {
                 let mut g = state.write().await;
-                g.next_scan_secs = interval_secs;
+                g.next_scan_secs = sleep_secs;
             }
-            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+            tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
 
-            if let Err(e) = scan_positions(&config, &state, &tx, &mut already_queued).await {
-                warn!("Position scan failed: {}", e);
-            } else {
-                let mut g = state.write().await;
-                g.last_scan_at = Some(std::time::Instant::now());
+            match scan_positions(&config, &state, &tx, &mut already_queued).await {
+                Ok(()) => {
+                    consecutive_errors = 0;
+                    let mut g = state.write().await;
+                    g.last_scan_at = Some(std::time::Instant::now());
+                }
+                Err(e) => {
+                    consecutive_errors += 1;
+                    warn!(
+                        "Position scan failed (consecutive={}): {}",
+                        consecutive_errors, e
+                    );
+                }
             }
         }
     });
@@ -198,7 +223,8 @@ async fn scan_positions(
     let our_token_ids: HashSet<String> = our_token_ids;
 
     let mut all_positions: Vec<TargetPosition> = Vec::new();
-    let mut to_enter: Vec<(String, TradeEvent)> = Vec::new();
+    // Gap 3 fix: tuple includes percent_pnl so we can sort by it correctly.
+    let mut to_enter: Vec<(String, TradeEvent, Decimal)> = Vec::new();
 
     for wallet_str in &config.target_wallets {
         let wallet_str = wallet_str.trim();
@@ -215,7 +241,7 @@ async fn scan_positions(
             Ok(p) => p,
             Err(e) => {
                 warn!("Failed to fetch positions for {}: {}", wallet_str, e);
-                continue;
+                return Err(e.into()); // let the caller apply backoff
             }
         };
 
@@ -258,16 +284,14 @@ async fn scan_positions(
                     taker_address: wallet_str.to_string(),
                     token_id: token_id.clone(),
                     // Use avg_price (what the target paid) not cur_price.
-                    // Strategy engine applies slippage on top: limit = avg_price × (1 + slippage).
-                    // If market is above avg_price  → GTC order waits for price to return.
-                    // If market is at/below avg_price → fills immediately at market (≤ limit).
                     price: pos.avg_price,
-                    // Store full target size -- strategy engine will apply budget cap via compute_order_usd
+                    // Store full target size -- strategy engine will apply budget cap
                     size: pos.size,
                     side: TradeSide::BUY,
                     timestamp: chrono::Utc::now().timestamp(),
                 };
-                to_enter.push((token_id.clone(), event));
+                // Gap 3 fix: store percent_pnl alongside the event for correct sorting.
+                to_enter.push((token_id.clone(), event, pos.percent_pnl));
             }
 
             let title = if pos.title.chars().count() > 45 {
@@ -291,10 +315,9 @@ async fn scan_positions(
     }
 
     // Pre-size the scan entries using the configured sizing mode.
-    let sized_entries: Vec<(String, TradeEvent)> = to_enter
+    let mut sized_entries: Vec<(String, TradeEvent, Decimal)> = to_enter
         .into_iter()
-        .filter_map(|(token_id, mut ev)| {
-            // avg_price not directly available here -- re-derive from all_positions
+        .filter_map(|(token_id, mut ev, percent_pnl)| {
             let pos_avg = all_positions
                 .iter()
                 .find(|p| p.token_id == token_id)
@@ -311,7 +334,7 @@ async fn scan_positions(
             let size = (budget_usd / ev.price).min(ev.size).round_dp(2);
             if size > Decimal::ZERO {
                 ev.size = size;
-                Some((token_id, ev))
+                Some((token_id, ev, percent_pnl))
             } else {
                 None
             }
@@ -334,23 +357,21 @@ async fn scan_positions(
         guard.last_scan_at = Some(std::time::Instant::now());
     }
 
-    // Queue entry events after releasing lock.
-    // IMPORTANT: only enter ONE position per scan cycle - the one closest to the
-    // target's entry price (lowest |percent_pnl| = best catch-up opportunity).
-    // The next scan cycle will pick up the next-best position, and so on.
-    // This prevents depleting the wallet balance in a single burst.
-    let mut sized_entries = sized_entries;
-    sized_entries.sort_by(|(_, a), (_, b)| {
-        // lower abs pnl from target's entry = better catch-up = enter first
-        let a_pnl = a.price; // price ~ cur_price; use percent_pnl from all_positions
-        let b_pnl = b.price;
-        a_pnl
-            .partial_cmp(&b_pnl)
+    // Gap 3 fix: sort by |percent_pnl| ascending so the position closest to the
+    // target's entry price (freshest opportunity) is entered first.
+    // Previously this sorted by ev.price (token price in $) which was semantically wrong.
+    sized_entries.sort_by(|(_, _, pnl_a), (_, _, pnl_b)| {
+        pnl_a
+            .abs()
+            .partial_cmp(&pnl_b.abs())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Pick only the single best opportunity this cycle
-    if let Some((token_id, event)) = sized_entries.into_iter().next() {
+    // Gap 8: queue up to scan_max_entries_per_cycle positions per cycle
+    // (default 1 = conservative; configurable via SCAN_MAX_ENTRIES_PER_CYCLE).
+    // Sort guarantees the freshest catch-up opportunities are taken first.
+    let max_entries = config.scan_max_entries_per_cycle;
+    for (token_id, event, _pnl) in sized_entries.into_iter().take(max_entries) {
         debug!(
             "Scanner queuing entry for token {}",
             &token_id[..token_id.len().min(12)]

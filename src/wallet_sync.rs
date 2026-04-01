@@ -1,17 +1,21 @@
 //! Background tasks that keep shared state in sync with the Polymarket Data API.
 //!
-//! All four tasks here follow the same shape: spawn a loop, fetch from the API,
+//! All tasks here follow the same shape: spawn a loop, fetch from the API,
 //! write to `BotState`. Extracting them here keeps `main.rs` as a thin wiring
 //! file and makes each task independently testable.
 //!
-//! | Task                  | Interval | What it updates                         |
-//! |-----------------------|----------|-----------------------------------------|
-//! | `seed_own_positions`  | once     | `state.positions` (boot snapshot)       |
-//! | `start_position_sync` | 30 s     | `state.positions` (fill tracking)       |
-//! | `start_price_refresh` | 20 s     | `state.target_positions[*].cur_price`   |
-//! | `start_balance_poll`  | 10 s     | `state.total_balance`                   |
+//! | Task                       | Interval | What it updates                               |
+//! |----------------------------|----------|-----------------------------------------------|
+//! | `seed_own_positions`       | once     | `state.positions` (boot snapshot)             |
+//! | `seed_pending_orders`      | once     | `state.pending_order_tokens` (boot snapshot)  |
+//! | `start_position_sync`      | 30 s     | `state.positions` (fill tracking, Gap 4)      |
+//! | `start_price_refresh`      | 20 s     | `state.target_positions[*].cur_price`+PnL     |
+//! | `start_balance_poll`       | 10 s     | `state.total_balance`                         |
+//! | `start_position_close_sweep` | 60 s   | synthetic SELL events (Gap 2 fix)             |
 
+use crate::backoff::next_backoff;
 use crate::clients::{AuthedClobClient, BalanceFetcher};
+use crate::copy_ledger::CopyLedger;
 use crate::models::{Position, TradeEvent, TradeSide};
 use crate::state::BotState;
 use alloy::primitives::Address;
@@ -22,7 +26,7 @@ use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 type State = Arc<RwLock<BotState>>;
 
@@ -97,20 +101,24 @@ pub async fn seed_pending_orders(clob: &AuthedClobClient, state: State) {
 // 2. Position sync — runs every 30 s, upserts filled positions into
 //    state.positions so GTC fills that happen after boot become visible in the
 //    TUI table without requiring a bot restart.
+//    Gap 4: also calls ledger.update_fill() when a position size differs from
+//    the recorded order size (partial fills).
 // ---------------------------------------------------------------------------
-pub fn start_position_sync(funder: String, state: State) {
+pub fn start_position_sync(funder: String, state: State, copy_ledger: Arc<Mutex<CopyLedger>>) {
     tokio::spawn(async move {
         let client = DataClient::default();
         // Boot seed has already completed (main.rs awaits seed_own_positions first).
         // Still wait 30s before the first diff-refresh to avoid hammering the API.
         tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+        let mut consecutive_errors: u32 = 0;
         loop {
             if let Ok(addr) = Address::from_str(&funder) {
                 let req = PositionsRequest::builder().user(addr).build();
                 match client.positions(&req).await {
                     Ok(positions) => {
+                        consecutive_errors = 0;
                         let mut guard = state.write().await;
-                        for p in positions {
+                        for p in &positions {
                             if p.redeemable || p.cur_price == Decimal::ZERO {
                                 // Market resolved — remove stale entry.
                                 guard.positions.remove(&p.asset.to_string());
@@ -125,11 +133,32 @@ pub fn start_position_sync(funder: String, state: State) {
                                 );
                             }
                         }
+                        drop(guard);
+
+                        // Gap 4: update ledger fill sizes for partial fills.
+                        let mut ledger = copy_ledger.lock().await;
+                        for p in &positions {
+                            if p.redeemable || p.cur_price == Decimal::ZERO {
+                                continue;
+                            }
+                            let token_id = p.asset.to_string();
+                            // update_fill is a no-op if sizes already match or no entry exists.
+                            ledger.update_fill(&token_id, p.size);
+                        }
                     }
-                    Err(e) => tracing::warn!("Position sync failed: {}", e),
+                    Err(e) => {
+                        consecutive_errors += 1;
+                        tracing::warn!(
+                            "Position sync failed (consecutive={}): {}",
+                            consecutive_errors,
+                            e
+                        );
+                    }
                 }
             }
-            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            // Gap 6: exponential backoff on sustained errors; base 30s, max 300s.
+            let sleep = next_backoff(consecutive_errors, 30, 300);
+            tokio::time::sleep(tokio::time::Duration::from_secs(sleep)).await;
         }
     });
 }
@@ -138,34 +167,79 @@ pub fn start_position_sync(funder: String, state: State) {
 // 3. Price refresh — runs every 20 s, updates cur_price on each
 //    target_position entry so the TUI scanner table shows live prices
 //    independent of the scanner's adaptive interval.
+//
+//    Gap 7: unrealized PnL is now computed from OUR positions (state.positions)
+//    keyed against the fresh price_map, with a fallback to avg_entry if a
+//    price is not in the map.  This prevents tokens that closed between
+//    refreshes from contributing 0 to the total.
 // ---------------------------------------------------------------------------
 pub fn start_price_refresh(target_wallets: Vec<String>, state: State) {
     tokio::spawn(async move {
         let client = DataClient::default();
         tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+        let mut consecutive_errors: u32 = 0;
         loop {
             let mut price_map: HashMap<String, Decimal> = HashMap::new();
+            let mut had_error = false;
             for wallet_str in &target_wallets {
                 let wallet_str = wallet_str.trim();
                 if let Ok(addr) = Address::from_str(wallet_str) {
                     let req = PositionsRequest::builder().user(addr).build();
-                    if let Ok(ps) = client.positions(&req).await {
-                        for p in ps {
-                            price_map.insert(p.asset.to_string(), p.cur_price);
+                    match client.positions(&req).await {
+                        Ok(ps) => {
+                            for p in ps {
+                                price_map.insert(p.asset.to_string(), p.cur_price);
+                            }
+                        }
+                        Err(e) => {
+                            had_error = true;
+                            tracing::warn!(
+                                "Price refresh failed for {}: {e} (consecutive={})",
+                                &wallet_str[..wallet_str.len().min(10)],
+                                consecutive_errors + 1
+                            );
                         }
                     }
                 }
             }
-            if !price_map.is_empty() {
+
+            if had_error {
+                consecutive_errors += 1;
+            } else {
+                consecutive_errors = 0;
+            }
+
+            if !price_map.is_empty() || !had_error {
                 let mut g = state.write().await;
+
+                // Update cur_price on target_positions
                 for tp in g.target_positions.iter_mut() {
                     if let Some(&fresh_price) = price_map.get(&tp.token_id) {
                         tp.cur_price = fresh_price;
                     }
                 }
                 g.last_price_refresh_at = Some(std::time::Instant::now());
+
+                // Gap 7: recompute unrealized PnL from OUR positions, falling back
+                // to avg_entry (PnL = 0) when a token is absent from price_map.
+                // This is correct regardless of whether a target has already closed.
+                let unrealized: Decimal = g
+                    .positions
+                    .values()
+                    .map(|p| {
+                        let cur = price_map
+                            .get(&p.token_id)
+                            .copied()
+                            .unwrap_or(p.average_entry_price);
+                        (cur - p.average_entry_price) * p.size
+                    })
+                    .sum();
+                g.unrealized_pnl = unrealized;
             }
-            tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+
+            // Gap 6: backoff on sustained price-refresh errors; base 20s, max 120s.
+            let sleep = next_backoff(consecutive_errors, 20, 120);
+            tokio::time::sleep(tokio::time::Duration::from_secs(sleep)).await;
         }
     });
 }
@@ -176,15 +250,26 @@ pub fn start_price_refresh(target_wallets: Vec<String>, state: State) {
 // ---------------------------------------------------------------------------
 pub fn start_balance_poll(balance_fetcher: BalanceFetcher, state: State) {
     tokio::spawn(async move {
+        let mut consecutive_errors: u32 = 0;
         loop {
             match balance_fetcher().await {
                 Ok(balance) => {
+                    consecutive_errors = 0;
                     let mut guard = state.write().await;
                     guard.total_balance = balance;
                 }
-                Err(e) => tracing::warn!("Balance fetch failed: {}", e),
+                Err(e) => {
+                    consecutive_errors += 1;
+                    tracing::warn!(
+                        "Balance fetch failed (consecutive={}): {}",
+                        consecutive_errors,
+                        e
+                    );
+                }
             }
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            // Gap 6: backoff on balance-poll errors; base 10s, max 60s.
+            let sleep = next_backoff(consecutive_errors, 10, 60);
+            tokio::time::sleep(tokio::time::Duration::from_secs(sleep)).await;
         }
     });
 }
@@ -195,25 +280,18 @@ pub fn start_balance_poll(balance_fetcher: BalanceFetcher, state: State) {
 //    hold that NO target still holds, a synthetic SELL event is emitted so
 //    the strategy engine closes our position.
 //
-//    This is a backstop for the two failure modes that can cause us to miss
-//    a WS-delivered SELL event:
-//      - Bug A (now fixed): checksum/lowercase address mismatch drops the event
-//      - Bug B (now fixed): scanner race clears target_holds before event arrives
-//    Even if both fixes are in place, the sweep provides defense-in-depth.
-//
-//    The sweep event uses the first configured target wallet as `taker_address`
-//    so it clears the wallet check in strategy.rs (which is a Vec::contains on
-//    config.target_wallets).  Strategy uses our HELD size (from state.positions),
-//    not the event size, for the actual SELL order, so the synthetic size field
-//    is only used for the risk-engine $1 minimum check.
+//    Gap 2 fix: the synthetic event's `taker_address` is now set to the
+//    `source_wallet` recorded in the copy ledger for that token.  This ensures
+//    `record_close(token_id, source_wallet)` in strategy.rs correctly finds and
+//    closes the ledger entry.  Falls back to `first_target` if no ledger entry
+//    exists (defensive-close path — the engine handles this gracefully).
 // ---------------------------------------------------------------------------
 pub fn start_position_close_sweep(
     target_wallets: Vec<String>,
     state: Arc<RwLock<BotState>>,
     tx: mpsc::Sender<TradeEvent>,
+    copy_ledger: Arc<Mutex<CopyLedger>>,
 ) {
-    // We need at least one target wallet address to pass the wallet check in
-    // strategy.rs.  If there are none the sweep cannot function safely.
     let Some(first_target) = target_wallets.first().cloned() else {
         tracing::warn!("Position close sweep: no target wallets configured — sweep disabled.");
         return;
@@ -269,19 +347,24 @@ pub fn start_position_close_sweep(
                         pos.size,
                     );
 
-                    // Build a synthetic SELL event.
-                    // taker_address = first target wallet so the wallet check in
-                    // strategy.rs (Vec::contains on config.target_wallets) passes.
-                    // strategy.rs reads our ACTUAL held size from state.positions,
-                    // so the event.size here is only used for the risk-engine
-                    // spoofing check (must be > $1 notional).
+                    // Gap 2 fix: look up the ledger's source_wallet for this token
+                    // so the synthetic SELL's taker_address correctly matches the
+                    // ledger entry that record_close() will look for.
+                    let source_wallet = {
+                        let ledger = copy_ledger.lock().await;
+                        ledger
+                            .find_active_for_token(&pos.token_id)
+                            .map(|e| e.source_wallet.clone())
+                            .unwrap_or_else(|| first_target.clone())
+                    };
+
                     let event = TradeEvent {
                         transaction_hash: format!(
                             "sweep_{}",
                             &pos.token_id[..pos.token_id.len().min(12)]
                         ),
-                        maker_address: first_target.clone(),
-                        taker_address: first_target.clone(),
+                        maker_address: source_wallet.clone(),
+                        taker_address: source_wallet.clone(),
                         token_id: pos.token_id.clone(),
                         price: pos.average_entry_price,
                         size: pos.size,

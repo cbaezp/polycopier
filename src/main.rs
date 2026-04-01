@@ -1,3 +1,4 @@
+pub mod backoff;
 pub mod clients;
 pub mod config;
 pub mod copied_counter;
@@ -116,11 +117,18 @@ async fn main() -> anyhow::Result<()> {
             let guard = state.read().await;
             guard.positions.keys().cloned().collect()
         };
-        copy_ledger.lock().await.reconcile(&live_token_ids);
+        let mut ledger = copy_ledger.lock().await;
+        ledger.reconcile(&live_token_ids);
+        // Prune closed entries older than configured retention period (Gap 11).
+        ledger.prune_closed_older_than(config.ledger_retention_days);
     }
 
     // Ongoing wallet sync (positions, prices, balance) — all fire-and-forget loops.
-    wallet_sync::start_position_sync(config.funder_address.clone(), state.clone());
+    wallet_sync::start_position_sync(
+        config.funder_address.clone(),
+        state.clone(),
+        copy_ledger.clone(), // Gap 4: passed so sync can update fill sizes
+    );
     wallet_sync::start_price_refresh(config.target_wallets.clone(), state.clone());
     wallet_sync::start_balance_poll(balance_fetcher, state.clone());
 
@@ -129,7 +137,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Position-close sweep — backstop that emits synthetic SELLs for any
     // position we hold that no target still holds (catches missed WS SELL events).
-    wallet_sync::start_position_close_sweep(config.target_wallets.clone(), state.clone(), event_tx);
+    // Gap 2 fix: pass copy_ledger so sweep uses the correct source_wallet.
+    wallet_sync::start_position_close_sweep(
+        config.target_wallets.clone(),
+        state.clone(),
+        event_tx,
+        copy_ledger.clone(),
+    );
 
     // Copied counter (header "Copied: N" — live API intersection every 30 s)
     copied_counter::start_copied_counter(

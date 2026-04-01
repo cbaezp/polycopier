@@ -93,7 +93,10 @@ async fn run_once(
                     let pnl = p.percent_pnl;
                     let today = chrono::Utc::now().date_naive();
                     let redeemable = p.redeemable;
-                    let expired = p.end_date.is_some_and(|d| d < today);
+                    // Gap 9: use <= today to match scanner's same-day expiry filter.
+                    // Previously < today caused same-day markets to stay in the watcher
+                    // 24h longer than needed.
+                    let expired = p.end_date.is_some_and(|d| d <= today);
 
                     let entry = target_states.entry(tid).or_insert(TargetState {
                         pnl: Decimal::MIN,

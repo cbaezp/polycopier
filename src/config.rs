@@ -31,6 +31,18 @@ pub struct Config {
     pub sizing_mode: SizingMode,
     /// Fraction of OUR balance to use per trade. Only relevant for `SizingMode::SelfPct`.
     pub copy_size_pct: Option<Decimal>,
+    /// Max positions the scanner may queue per cycle (default 1 — conservative).
+    pub scan_max_entries_per_cycle: usize,
+    /// Fee buffer applied to SELL size: `held_size * sell_fee_buffer`. Default 0.97.
+    pub sell_fee_buffer: Decimal,
+    /// Days to retain closed ledger entries before pruning. Default 90.
+    pub ledger_retention_days: u32,
+    /// Maximum USD volume the bot may trade in a single UTC day. 0 = disabled.
+    pub max_daily_volume_usd: Decimal,
+    /// Consecutive BUY losses before triggering a cooldown. 0 = disabled.
+    pub max_consecutive_losses: u32,
+    /// Seconds to pause after hitting max_consecutive_losses. Default 300.
+    pub loss_cooldown_secs: u64,
 }
 
 /// Returns true if a config value looks like a placeholder that hasn't been filled in.
@@ -277,6 +289,37 @@ impl Config {
             .and_then(|s| s.parse::<Decimal>().ok())
             .filter(|&p| p > Decimal::ZERO && p <= Decimal::ONE);
 
+        let scan_max_entries_per_cycle = env::var("SCAN_MAX_ENTRIES_PER_CYCLE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1)
+            .max(1);
+
+        let sell_fee_buffer = env::var("SELL_FEE_BUFFER")
+            .ok()
+            .and_then(|v| v.parse::<Decimal>().ok())
+            .unwrap_or_else(|| Decimal::from_str("0.97").unwrap());
+
+        let ledger_retention_days = env::var("LEDGER_RETENTION_DAYS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(90);
+
+        let max_daily_volume_usd = env::var("MAX_DAILY_VOLUME_USD")
+            .ok()
+            .and_then(|v| v.parse::<Decimal>().ok())
+            .unwrap_or(Decimal::ZERO);
+
+        let max_consecutive_losses = env::var("MAX_CONSECUTIVE_LOSSES")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+
+        let loss_cooldown_secs = env::var("LOSS_COOLDOWN_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(300);
+
         Ok(Self {
             private_key,
             funder_address,
@@ -291,6 +334,12 @@ impl Config {
             max_entry_price,
             sizing_mode,
             copy_size_pct,
+            scan_max_entries_per_cycle,
+            sell_fee_buffer,
+            ledger_retention_days,
+            max_daily_volume_usd,
+            max_consecutive_losses,
+            loss_cooldown_secs,
         })
     }
 
@@ -519,6 +568,33 @@ impl Config {
 
         println!("Settings saved. Restarting bot...");
 
+        // Advanced settings: always read from env (not prompted in wizard).
+        let scan_max_entries_per_cycle = env::var("SCAN_MAX_ENTRIES_PER_CYCLE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1)
+            .max(1);
+        let sell_fee_buffer = env::var("SELL_FEE_BUFFER")
+            .ok()
+            .and_then(|v| v.parse::<Decimal>().ok())
+            .unwrap_or_else(|| Decimal::from_str("0.97").unwrap());
+        let ledger_retention_days = env::var("LEDGER_RETENTION_DAYS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(90);
+        let max_daily_volume_usd = env::var("MAX_DAILY_VOLUME_USD")
+            .ok()
+            .and_then(|v| v.parse::<Decimal>().ok())
+            .unwrap_or(Decimal::ZERO);
+        let max_consecutive_losses = env::var("MAX_CONSECUTIVE_LOSSES")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        let loss_cooldown_secs = env::var("LOSS_COOLDOWN_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(300);
+
         Ok(Self {
             private_key,
             funder_address,
@@ -533,6 +609,12 @@ impl Config {
             max_entry_price,
             sizing_mode,
             copy_size_pct,
+            scan_max_entries_per_cycle,
+            sell_fee_buffer,
+            ledger_retention_days,
+            max_daily_volume_usd,
+            max_consecutive_losses,
+            loss_cooldown_secs,
         })
     }
 }

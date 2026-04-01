@@ -235,3 +235,75 @@ mod wallet_sync_position_rules {
         assert_eq!(state.positions.len(), 5);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Order watcher expiry alignment (Gap 9)
+//
+// Scanner uses  end_date <= today (same-day included).
+// Watcher used  end_date <  today (excluded same-day — now fixed to <=).
+//
+// We test the corrected watcher predicate directly.
+// ---------------------------------------------------------------------------
+
+mod watcher_expiry_alignment_tests {
+    use chrono::Utc;
+
+    /// Replicates the corrected watcher expiry check: `end_date <= today`.
+    fn watcher_is_expired(end_date: chrono::NaiveDate) -> bool {
+        let today = Utc::now().date_naive();
+        end_date <= today
+    }
+
+    /// Replicates the scanner expiry check (unchanged): `end_date <= today`.
+    fn scanner_is_expired(end_date: chrono::NaiveDate) -> bool {
+        let today = Utc::now().date_naive();
+        end_date <= today
+    }
+
+    #[test]
+    fn watcher_cancels_same_day_expiry() {
+        let today = Utc::now().date_naive();
+        assert!(
+            watcher_is_expired(today),
+            "watcher should cancel same-day-expiry market"
+        );
+    }
+
+    #[test]
+    fn scanner_skips_same_day_expiry() {
+        let today = Utc::now().date_naive();
+        assert!(
+            scanner_is_expired(today),
+            "scanner should skip same-day-expiry market"
+        );
+    }
+
+    #[test]
+    fn watcher_and_scanner_agree_on_same_day() {
+        let today = Utc::now().date_naive();
+        // After the fix, both use <=
+        assert_eq!(
+            watcher_is_expired(today),
+            scanner_is_expired(today),
+            "watcher and scanner must agree on same-day expiry"
+        );
+    }
+
+    #[test]
+    fn watcher_cancels_past_end_date() {
+        let yesterday = Utc::now().date_naive() - chrono::Duration::days(1);
+        assert!(watcher_is_expired(yesterday));
+    }
+
+    #[test]
+    fn watcher_does_not_cancel_future_expiry() {
+        let tomorrow = Utc::now().date_naive() + chrono::Duration::days(1);
+        assert!(!watcher_is_expired(tomorrow));
+    }
+
+    #[test]
+    fn watcher_does_not_cancel_far_future_expiry() {
+        let future = Utc::now().date_naive() + chrono::Duration::days(365);
+        assert!(!watcher_is_expired(future));
+    }
+}

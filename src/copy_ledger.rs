@@ -14,11 +14,22 @@
 //! This prevents double-sizing and makes SELL intent unambiguous: only the target we
 //! originally copied from can trigger a close.
 //!
-//! ## Persistence
+//! ## Persistence (atomic — Gap 1)
 //!
-//! Written to `copy_ledger.json` in the process working directory after every mutation.
-//! On startup, the file is loaded and reconciled against the live Polymarket API so that
-//! positions closed while the bot was down are correctly marked as closed.
+//! Written atomically: content is first written to `copy_ledger.json.tmp`, then
+//! `rename()`d over `copy_ledger.json`.  On POSIX systems rename() is atomic, so a
+//! crash mid-write can never leave a corrupt or truncated ledger file.
+//!
+//! ## Partial-fill tracking (Gap 4)
+//!
+//! `CopyEntry.filled_size` records the actual number of shares filled (updated by the
+//! 30s position-sync task).  The `size` field retains the original order size so both
+//! values are available for diagnostics.
+//!
+//! ## Pruning (Gap 11)
+//!
+//! `prune_closed_older_than(days)` removes closed entries whose `closed_at` timestamp
+//! is older than `days` UTC days.  Call this at startup after `reconcile`.
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
@@ -38,9 +49,12 @@ pub struct CopyEntry {
     pub token_id: String,
     /// Target wallet we copied this position from (normalized to lowercase).
     pub source_wallet: String,
-    /// Number of shares we purchased.
+    /// Number of shares in the SUBMITTED order (may exceed actual fill).
     pub size: Decimal,
-    /// Limit price we used when submitting the entry order.
+    /// Actual shares filled, updated by the position-sync task.
+    /// `None` until the first 30s sync that confirms a fill.
+    pub filled_size: Option<Decimal>,
+    /// Limit price used when submitting the entry order.
     pub entry_price: Decimal,
     /// When we submitted the entry order.
     pub copied_at: DateTime<Utc>,
@@ -107,18 +121,24 @@ impl CopyLedger {
         Self::default()
     }
 
-    // -- Persistence -------------------------------------------------------
+    // -- Persistence (atomic) -- Gap 1 -------------------------------------
 
-    /// Write the ledger to disk.  No-op if this is an in-memory-only ledger
-    /// (path is empty).  Logs a warning on failure but never panics.
+    /// Write the ledger to disk atomically via a `.tmp` sibling + rename.
+    /// No-op if this is an in-memory-only ledger (path is empty).
+    /// Logs a warning on failure but never panics.
     pub fn save(&self) {
         if self.path.is_empty() {
             return; // in-memory mode — no disk persistence
         }
+        let tmp = format!("{}.tmp", self.path);
         match serde_json::to_string_pretty(self) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&self.path, &json) {
-                    tracing::warn!("Failed to write {}: {e}", self.path);
+                if let Err(e) = std::fs::write(&tmp, &json) {
+                    tracing::warn!("Failed to write tmp ledger {}: {e}", tmp);
+                    return;
+                }
+                if let Err(e) = std::fs::rename(&tmp, &self.path) {
+                    tracing::warn!("Failed to rename tmp ledger to {}: {e}", self.path);
                 }
             }
             Err(e) => tracing::warn!("Failed to serialise copy_ledger: {e}"),
@@ -146,6 +166,7 @@ impl CopyLedger {
             token_id,
             source_wallet,
             size,
+            filled_size: None,
             entry_price,
             copied_at: Utc::now(),
             closed: false,
@@ -170,6 +191,20 @@ impl CopyLedger {
             &token_id[..token_id.len().min(12)],
             &source_wallet[..source_wallet.len().min(10)],
         );
+    }
+
+    /// Update the filled size for the most recent active entry for `token_id`. (Gap 4)
+    ///
+    /// Called by the position-sync task when it observes a position size that
+    /// differs from the recorded order size.
+    pub fn update_fill(&mut self, token_id: &str, actual_size: Decimal) {
+        for entry in self.entries.iter_mut().rev() {
+            if !entry.closed && entry.token_id == token_id {
+                entry.filled_size = Some(actual_size);
+                self.save();
+                return;
+            }
+        }
     }
 
     // -- Queries ------------------------------------------------------------
@@ -230,5 +265,36 @@ impl CopyLedger {
         } else {
             tracing::info!("Ledger reconcile: all active entries match live wallet. No changes.");
         }
+    }
+
+    // -- Pruning (Gap 11) --------------------------------------------------
+
+    /// Remove closed entries whose `closed_at` timestamp is older than `days` UTC days.
+    ///
+    /// Active (unclosed) entries are never removed.
+    /// Returns the number of entries pruned.
+    pub fn prune_closed_older_than(&mut self, days: u32) -> usize {
+        if days == 0 {
+            return 0; // 0 = disabled
+        }
+        let cutoff = Utc::now() - chrono::Duration::days(i64::from(days));
+        let before = self.entries.len();
+        self.entries.retain(|e| {
+            if !e.closed {
+                return true; // never prune active entries
+            }
+            // Keep if closed_at is recent or unknown
+            e.closed_at.is_none_or(|t| t >= cutoff)
+        });
+        let pruned = before - self.entries.len();
+        if pruned > 0 {
+            tracing::info!(
+                "Ledger: pruned {} closed entries older than {} days.",
+                pruned,
+                days
+            );
+            self.save();
+        }
+        pruned
     }
 }
