@@ -101,10 +101,16 @@ The bot can also run **headless** (no TUI) as a systemd daemon on a Linux server
 
   All modes enforce a $5.00 CLOB minimum and `MAX_TRADE_SIZE_USD` ceiling.
 
-- **Risk engine** - per-trade minimum notional ($5.00 CLOB floor), per-trade size cap (`MAX_TRADE_SIZE_USD`), and three scanner guards:
-  - `MAX_COPY_LOSS_PCT` — skip catch-up entries where the target is already too far underwater (position is declining; don't follow a loser even at a cheaper price)
-  - `MAX_COPY_GAIN_PCT` — skip catch-up entries where the target is already too far in profit (price has moved away from their entry; chasing adds slippage with no edge)
-  - **Expiry guard** — skip any position on a market with `redeemable=true` (already resolved) or whose `endDate` is in the past
+- **Risk engine** — multi-layer defence applied to every trade event:
+  - **Micro-trade filter** — rejects orders with < $1.00 notional (anti-spoofing)
+  - **Size cap** — `MAX_TRADE_SIZE_USD` ceiling on every trade
+  - **Daily volume limit** — `MAX_DAILY_VOLUME_USD` (0 = disabled); counts both BUY and SELL side; resets at UTC midnight
+  - **Consecutive-loss circuit breaker** — `MAX_CONSECUTIVE_LOSSES` (0 = disabled); pauses trading for `LOSS_COOLDOWN_SECS` after N consecutive losses
+  - **Rapid-flip guard** — 60-second cooldown per token prevents the bot from immediately re-entering a position it just exited
+  - **Scanner guards** applied only to catch-up (scanner) entries:
+    - `MAX_COPY_LOSS_PCT` — skip if target is already this far underwater
+    - `MAX_COPY_GAIN_PCT` — skip if target is already this far in profit (chasing adds slippage)
+    - **Expiry guard** — skip if `redeemable=true` (market resolved on-chain) or `end_date` is strictly in the past (`< today`). Same-day markets are **not** blocked — `redeemable` is the authoritative settlement signal; `end_date < today` is only a backstop for stale API data
 
 - **Terminal UI** - six-panel ratatui interface:
   - Account dashboard (balance, PnL, **API-sourced Copied counter**)
@@ -214,6 +220,12 @@ cargo run --release
 | `MAX_COPY_GAIN_PCT` | No | `0.05` | Skip catch-up entries where target is already this far in profit — prevents chasing moved positions (5% = `0.05`) |
 | `MIN_ENTRY_PRICE` | No | `0.02` | Minimum current token price for catch-up entries (filters near-zero dust) |
 | `MAX_ENTRY_PRICE` | No | `0.999` | Maximum current token price for catch-up entries. Raise above `0.95` when copying targets who trade high-confidence NO positions |
+| `SCAN_MAX_ENTRIES_PER_CYCLE` | No | `1` | Max positions the scanner queues per cycle. Raise to 2–3 to enter multiple opportunities simultaneously |
+| `SELL_FEE_BUFFER` | No | `0.97` | Multiplier applied to SELL size to cover CLOB fees (`sell_size = held × buffer`). Default absorbs ~3% fee |
+| `LEDGER_RETENTION_DAYS` | No | `90` | Days to keep closed ledger entries before pruning on startup. `0` = never prune |
+| `MAX_DAILY_VOLUME_USD` | No | `0` | Total USD the bot may trade per UTC day (BUY + SELL). `0` = disabled |
+| `MAX_CONSECUTIVE_LOSSES` | No | `0` | Number of consecutive losses before triggering a cooldown pause. `0` = disabled |
+| `LOSS_COOLDOWN_SECS` | No | `300` | Seconds to pause trading after hitting `MAX_CONSECUTIVE_LOSSES` |
 
 ### Wallet Type
 
@@ -398,7 +410,8 @@ main.rs
   +-- strategy.rs         Receives TradeEvents, queries live API + ledger for intent,
   |                        applies risk checks, submits orders via OrderSubmitter
   |
-  +-- risk.rs             RiskEngine: minimum notional, max size enforcement
+  +-- risk.rs             RiskEngine: micro-trade filter, daily volume cap,
+  |                        consecutive-loss circuit breaker, rapid-flip guard (60s per token)
   |
   +-- state.rs            Shared BotState (Arc<RwLock<_>>): balance, our positions,
   |                        target positions, live feed, TUI counters, refresh timestamps
@@ -411,6 +424,7 @@ main.rs
   |
   +-- models.rs           Core types: TradeEvent, EvaluatedTrade, TargetPosition
   |                        (including source_wallet), ScanStatus, SizingMode
+  +-- backoff.rs          Exponential backoff helper (used by listener, scanner, wallet_sync)
   +-- utils.rs            Timestamp formatting helpers
   |
   +-- deploy/
@@ -463,12 +477,14 @@ Polymarket Data API
 The scanner fetches the target's full open portfolio and evaluates each position in order.
 A position is skipped at the first failing guard:
 
-1. **Already held** - the bot already holds this token (`SkippedOwned`)
-2. **Already queued** - an entry order was sent this session (`Entered`)
-3. **Price range** - current price must be between `$0.02` and `$0.95` (`SkippedPrice`)
-4. **Loss threshold** - the target's unrealized loss must be less than `MAX_COPY_LOSS_PCT` (`SkippedLoss`)
+1. **Resolved / expired** — `redeemable=true` (market settled on-chain) or `end_date` is strictly before today (`end_date < today`). Same-day markets (`end_date == today`) are **not** blocked when `redeemable=false` — they are still open and accepting orders. Resolution state comes from the `redeemable` flag, not the date.
+2. **Already held** — the bot already holds this token (`SkippedOwned`)
+3. **Already queued** — an entry order was sent this session (`Entered`)
+4. **Price range** — current price must be between `MIN_ENTRY_PRICE` and `MAX_ENTRY_PRICE` (`SkippedPrice`)
+5. **Loss threshold** — the target's unrealized loss must be less than `MAX_COPY_LOSS_PCT` (`SkippedLoss`)
+6. **Gain threshold** — the target's unrealized gain must be less than `MAX_COPY_GAIN_PCT` (`SkippedGain`)
 
-Positions passing all guards are classified as `Monitoring` (green in TUI) and an entry is queued.
+Positions passing all guards are classified as `Monitoring` (green in TUI) and up to `SCAN_MAX_ENTRIES_PER_CYCLE` entries are queued per cycle (default 1).
 
 ### Catch-up Intervals
 
@@ -491,7 +507,7 @@ The scanner reschedules itself after each cycle based on the best available oppo
 # Run with live reloading (requires cargo-watch)
 cargo watch -x run
 
-# Run the full test suite (121 tests, no network required)
+# Run the full test suite (267 tests, no network required)
 cargo test --all
 
 # Run only the copy ledger tests
@@ -511,8 +527,12 @@ cargo fmt
 
 | File | What it covers |
 |---|---|
-| `tests/copy_ledger_tests.rs` | `CopyLedger` — CRUD, source-wallet specificity, reconcile, disk round-trip, in-memory mode |
-| `tests/integration.rs` | Strategy engine: intent classification (ledger-aware + live-API fallback), one-position-per-token, SELL gating by source wallet, risk guards, slippage, deduplication |
+| `tests/copy_ledger_tests.rs` | `CopyLedger` — CRUD, source-wallet specificity, reconcile, disk round-trip, in-memory mode, atomic write, partial fill tracking, pruning, sweep source-wallet lookup |
+| `tests/integration.rs` | Strategy engine: intent classification, one-position-per-token, SELL gating, risk guards, slippage, deduplication; scanner sort, sell fee buffer, scan_max_entries, unrealized PnL |
+| `tests/backoff_tests.rs` | `next_backoff` — base interval, doubling, cap, overflow safety |
+| `tests/listener_tests.rs` | Dedup ring-buffer eviction; `try_send` backpressure semantics |
+| `tests/risk_tests.rs` | `RiskEngine` — daily volume limit, consecutive-loss circuit breaker, rapid-flip guard, anti-spoofing |
+| `tests/order_watcher_tests.rs` | Cancel-decision predicate; wallet_sync position upsert/remove rules; expiry alignment (`< today` for scanner and watcher) |
 | `tests/sizing_tests.rs` | `compute_order_usd` for all four sizing modes + floor/cap guards |
 | `tests/copied_counter_tests.rs` | `count_intersection` pure function: empty, full, partial, no overlap, multi-target |
 | `src/ui.rs` (`settings_tests`) | In-TUI settings editor: field change detection, key navigation, edit lifecycle, `.env` output |
