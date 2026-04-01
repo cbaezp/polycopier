@@ -5,7 +5,7 @@
 mod common;
 
 use polycopier::models::SizingMode;
-use polycopier::strategy::{compute_order_usd, MIN_ORDER_SHARES, MIN_ORDER_USD};
+use polycopier::strategy::{compute_order_usd, MIN_ORDER_SHARES};
 use rust_decimal_macros::dec;
 
 // -- Helpers ------------------------------------------------------------------

@@ -88,6 +88,12 @@ pub enum SettingsExit {
     SaveAndRestart,
 }
 
+impl Default for SettingsScreen {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SettingsScreen {
     pub fn new() -> Self {
         let fields = vec![
