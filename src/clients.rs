@@ -23,7 +23,14 @@ pub type OrderSubmitter = Arc<
 pub type BalanceFetcher =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Decimal>> + Send + 'static>> + Send + Sync>;
 
-pub async fn build_order_submitter(config: &Config) -> Result<(OrderSubmitter, BalanceFetcher)> {
+use polymarket_client_sdk::auth::state::Authenticated;
+use polymarket_client_sdk::auth::Normal;
+
+pub type AuthedClobClient = ClobClient<Authenticated<Normal>>;
+
+pub async fn build_order_submitter(
+    config: &Config,
+) -> Result<(OrderSubmitter, BalanceFetcher, AuthedClobClient)> {
     let signer = LocalSigner::from_str(&config.private_key)?.with_chain_id(Some(config.chain_id));
     let funder = Address::from_str(&config.funder_address)?;
 
@@ -52,8 +59,9 @@ pub async fn build_order_submitter(config: &Config) -> Result<(OrderSubmitter, B
         })
     });
 
+    let clob_for_submitter = clob.clone();
     let order_submitter: OrderSubmitter = Arc::new(move |order: OrderRequest| {
-        let clob = clob.clone();
+        let clob = clob_for_submitter.clone();
         let signer = signer.clone();
 
         Box::pin(async move {
@@ -127,5 +135,5 @@ pub async fn build_order_submitter(config: &Config) -> Result<(OrderSubmitter, B
         })
     });
 
-    Ok((order_submitter, balance_fetcher))
+    Ok((order_submitter, balance_fetcher, clob))
 }

@@ -38,9 +38,15 @@ pub fn classify_position(
     max_copy_loss_pct: Decimal,
     max_copy_gain_pct: Decimal,
 ) -> ScanStatus {
-    // Reject resolved markets (redeemable=true) or markets past their end date.
+    // Reject resolved markets (redeemable=true), markets past their end date,
+    // AND same-day expiries (end_date == today).
+    //
+    // Same-day markets are 5-min / 15-min binary prediction markets. Their CLOB
+    // order window closes minutes before settlement, so a catch-up GTC entry will
+    // almost always arrive after the window closes and get a 400 from the CLOB.
+    // Filtering them here prevents noisy 400 errors and wasted order attempts.
     let today = chrono::Utc::now().date_naive();
-    if redeemable || end_date.is_some_and(|d| d < today) {
+    if redeemable || end_date.is_some_and(|d| d <= today) {
         return ScanStatus::SkippedExpired;
     }
     if our_tokens.contains(token_id) {
@@ -64,7 +70,18 @@ pub fn start_position_scanner(
     tx: mpsc::Sender<TradeEvent>,
 ) {
     tokio::spawn(async move {
-        let mut already_queued: HashSet<String> = HashSet::new();
+        // Pre-populate already_queued from positions we already hold AND from
+        // live GTC orders seeded from the CLOB at boot. This prevents re-entry
+        // of both filled positions and pending-but-unfilled orders on restart.
+        let mut already_queued: HashSet<String> = {
+            let guard = state.read().await;
+            guard
+                .positions
+                .keys()
+                .cloned()
+                .chain(guard.pending_order_tokens.iter().cloned())
+                .collect()
+        };
 
         // Run immediately on startup so TUI is populated before the first sleep
         if let Err(e) = scan_positions(&config, &state, &tx, &mut already_queued).await {

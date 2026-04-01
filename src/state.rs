@@ -1,6 +1,6 @@
 use crate::models::{EvaluatedTrade, Position, TargetPosition};
 use rust_decimal::Decimal;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 pub struct BotState {
@@ -26,6 +26,14 @@ pub struct BotState {
     /// When target_positions.cur_price was last refreshed via the dedicated price
     /// refresh task (runs every 20s, independent of scanner urgency).
     pub last_price_refresh_at: Option<Instant>,
+    /// Token IDs for which we have a live GTC order in the CLOB that has NOT
+    /// yet been filled. Seeded from open CLOB orders at boot, updated by the
+    /// strategy engine on submission and by the order watcher on cancellation.
+    /// The scanner uses this alongside `positions` to prevent duplicate orders
+    /// across bot restarts.
+    pub pending_order_tokens: HashSet<String>,
+    /// When the order watcher last completed a cycle.
+    pub last_watcher_run_at: Option<Instant>,
 }
 
 impl BotState {
@@ -44,6 +52,8 @@ impl BotState {
             last_scan_at: None,
             next_scan_secs: 0,
             last_price_refresh_at: None,
+            pending_order_tokens: HashSet::new(),
+            last_watcher_run_at: None,
         }
     }
 

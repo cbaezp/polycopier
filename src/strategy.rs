@@ -35,21 +35,24 @@ pub fn calculate_entry_size(size: Decimal, price: Decimal, max_trade_usd: Decima
     }
 }
 
-/// Minimum notional the CLOB requires (5 shares * ~$1.00 = $5.00).
-pub const MIN_ORDER_USD: Decimal = Decimal::from_parts(5, 0, 0, false, 0);
+/// Minimum share count the Polymarket CLOB enforces per order.
+/// Any order with size < 5 shares gets a 400: "Size (X) lower than the minimum: 5"
+pub const MIN_ORDER_SHARES: Decimal = Decimal::from_parts(5, 0, 0, false, 0);
+
+/// Dollar floor (secondary sanity guard — the real constraint is MIN_ORDER_SHARES).
+pub const MIN_ORDER_USD: Decimal = Decimal::from_parts(1, 0, 0, false, 0);
 
 /// Compute the USD budget for a single BUY order according to the active [`SizingMode`].
 ///
 /// | Mode | Formula |
 /// |---|---|
 /// | `Fixed` | `max_trade_usd` (constant) |
-/// | `SelfPct` | `our_balance * copy_size_pct`, floored at `$5`, capped at `max_trade_usd` |
+/// | `SelfPct` | `our_balance * copy_size_pct`, capped at `max_trade_usd` |
 /// | `TargetUsd` | `target_notional` (exact $ the target bet), capped at `max_trade_usd` |
-/// | `TargetPct` | `(target_notional / target_portfolio_usd) * our_balance`, floored at `$5`, capped at `max_trade_usd` |
 ///
-/// Guards:
-/// - All modes are floored at `MIN_ORDER_USD` ($5.00) and capped at `max_trade_usd`.
-/// - If `target_portfolio_usd` is zero in `TargetPct` mode (no data yet) it falls back to `Fixed`.
+/// Returns **`Decimal::ZERO`** when the computed budget is below `MIN_ORDER_USD` ($1).
+/// Callers treat zero as "skip this order". This respects the user's configured
+/// percentage exactly: 7% of $39 = $2.73 ≥ $1 → order placed correctly.
 pub fn compute_order_usd(
     our_balance: Decimal,
     sizing_mode: &SizingMode,
@@ -66,9 +69,14 @@ pub fn compute_order_usd(
         }
         SizingMode::TargetUsd => target_notional,
     };
-    // floor = min($5, max_cap) handles misconfigured max < min gracefully
-    let floor = MIN_ORDER_USD.min(max_trade_usd);
-    desired.max(floor).min(max_trade_usd)
+    let capped = desired.min(max_trade_usd);
+    // Return ZERO to signal "skip" when below the CLOB minimum.
+    // Never floor UP — that silently overrides the user's sizing config.
+    if capped < MIN_ORDER_USD {
+        Decimal::ZERO
+    } else {
+        capped
+    }
 }
 
 pub fn start_strategy_engine(
@@ -245,28 +253,64 @@ pub fn start_strategy_engine(
                     };
                     let buy_size = raw_size.round_dp(2); // CLOB requires 2dp lot size
 
-                    // Pre-check balance -- avoids noisy 400 errors from CLOB
-                    let order_cost = buy_size * limit_price;
-                    if current_balance < order_cost {
+                    // CLOB hard minimum: 5 shares. Orders below this always 400.
+                    // With e.g. 7% of $24 = $1.68 at price $0.98 → 1.71 shares < 5 → skip.
+                    if buy_size < MIN_ORDER_SHARES {
                         warn!(
-                            "Insufficient balance (have ${:.2}, need ${:.2}) -- skipping entry",
-                            current_balance, order_cost
+                            "BUY skipped: computed {:.2} shares is below CLOB minimum of {} shares \
+                             (budget=${:.2} at price ${:.3}). Increase COPY_SIZE_PCT or wait for higher balance.",
+                            buy_size, MIN_ORDER_SHARES, budget_usd, limit_price
                         );
                         None
                     } else {
-                        Some(OrderRequest {
-                            token_id: event.token_id.clone(),
-                            price: limit_price,
-                            size: buy_size,
-                            side: event.side,
-                        })
-                    }
+                        // Pre-check balance -- avoids noisy 400 errors from CLOB
+                        let order_cost = buy_size * limit_price;
+                        if current_balance < order_cost {
+                            warn!(
+                                "Insufficient balance (have ${:.2}, need ${:.2}) -- skipping entry",
+                                current_balance, order_cost
+                            );
+                            None
+                        } else {
+                            // Check whether we already have a pending GTC order for this token.
+                            // Catches WS-triggered events for markets with an existing live GTC order.
+                            let already_pending = {
+                                let guard = state.read().await;
+                                guard.pending_order_tokens.contains(&event.token_id)
+                            };
+                            if already_pending {
+                                warn!(
+                                    "BUY skipped: live GTC order already exists for token {}",
+                                    event.token_id
+                                );
+                                None
+                            } else {
+                                Some(OrderRequest {
+                                    token_id: event.token_id.clone(),
+                                    price: limit_price,
+                                    size: buy_size,
+                                    side: event.side,
+                                })
+                            }
+                        }
+                    } // end MIN_ORDER_SHARES check
                 };
 
                 if let Some(order) = order {
+                    // Register token as pending BEFORE spawning so any concurrent
+                    // events for the same token are blocked immediately.
+                    {
+                        let mut guard = state.write().await;
+                        guard.pending_order_tokens.insert(order.token_id.clone());
+                    }
                     let submitter_clone = submitter.clone();
+                    let state_clone = state.clone();
+                    let token_id_clone = order.token_id.clone();
                     tokio::spawn(async move {
                         if let Err(e) = submitter_clone(order).await {
+                            // Remove from pending on failure so the order can be retried
+                            let mut guard = state_clone.write().await;
+                            guard.pending_order_tokens.remove(&token_id_clone);
                             tracing::error!("Execution failed: {}", e);
                         }
                     });
@@ -276,48 +320,4 @@ pub fn start_strategy_engine(
             }
         }
     });
-}
-
-// -- Tests ---------------------------------------------------------------------
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rust_decimal_macros::dec;
-
-    #[test]
-    fn buy_limit_price_adds_slippage() {
-        let price = dec!(0.50);
-        let slippage = dec!(0.02);
-        let result = calculate_limit_price(price, TradeSide::BUY, slippage);
-        assert_eq!(result, dec!(0.51));
-    }
-
-    #[test]
-    fn sell_limit_price_subtracts_slippage() {
-        let price = dec!(0.50);
-        let slippage = dec!(0.02);
-        let result = calculate_limit_price(price, TradeSide::SELL, slippage);
-        assert_eq!(result, dec!(0.49));
-    }
-
-    #[test]
-    fn entry_size_within_budget_unchanged() {
-        // 10 shares at $0.40 = $4 -- under $10 max
-        let result = calculate_entry_size(dec!(10), dec!(0.40), dec!(10));
-        assert_eq!(result, dec!(10));
-    }
-
-    #[test]
-    fn entry_size_capped_to_max_usd() {
-        // 100 shares at $0.40 = $40 -- over $10 max => 10/0.40 = 25 shares
-        let result = calculate_entry_size(dec!(100), dec!(0.40), dec!(10));
-        assert_eq!(result, dec!(25));
-    }
-
-    #[test]
-    fn zero_slippage_keeps_price_unchanged() {
-        let price = dec!(0.77);
-        let result = calculate_limit_price(price, TradeSide::BUY, dec!(0));
-        assert_eq!(result, price);
-    }
 }

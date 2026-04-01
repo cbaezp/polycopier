@@ -1434,3 +1434,123 @@ mod scan_interval_tests {
         assert_eq!(interval, MIN_S, "best opportunity should dominate");
     }
 }
+// -- Regression: duplicate-entry prevention ------------------------------------
+//
+// Bug: on every bot restart the position scanner re-entered markets we already
+// held because `already_queued` was reset to an empty HashSet. The fix:
+//
+//   A. `seed_own_positions` is now awaited in main.rs BEFORE the scanner starts,
+//      so state.positions is guaranteed populated by the time the first scan runs.
+//
+//   B. The scanner pre-populates `already_queued` from state.positions, so even
+//      tokens we hold are treated as already queued from the very first scan.
+//
+// These tests verify the classify_position behaviour that underpins both layers.
+
+mod reentry_prevention_tests {
+    use super::*;
+
+    fn tomorrow() -> chrono::NaiveDate {
+        (chrono::Utc::now() + chrono::Duration::days(1)).date_naive()
+    }
+
+    fn classify(token: &str, our_tokens: &HashSet<String>, queued: &HashSet<String>) -> ScanStatus {
+        classify_position(
+            token,
+            dec!(0.50),
+            dec!(0.0),
+            false,
+            Some(tomorrow()),
+            our_tokens,
+            queued,
+            dec!(0.02),
+            dec!(0.95),
+            dec!(0.40),
+            dec!(0.05),
+        )
+    }
+
+    // Layer A: state.positions provides SkippedOwned ------------------------
+
+    #[test]
+    fn held_position_returns_skipped_owned() {
+        // Token is in state.positions (seeded from wallet) → must not be entered.
+        let owned = token_set(&["btc_56k_token"]);
+        assert_eq!(
+            classify("btc_56k_token", &owned, &HashSet::new()),
+            ScanStatus::SkippedOwned,
+            "token we hold must be SkippedOwned, preventing re-entry"
+        );
+    }
+
+    #[test]
+    fn unrelated_token_not_blocked_by_other_owned() {
+        // Holding token A must not block entry into token B.
+        let owned = token_set(&["token_a"]);
+        assert_eq!(
+            classify("token_b", &owned, &HashSet::new()),
+            ScanStatus::Monitoring
+        );
+    }
+
+    // Layer B: already_queued pre-populated from state.positions ----------
+
+    #[test]
+    fn pre_queued_token_returns_entered_not_monitoring() {
+        // When already_queued is seeded from state.positions at scanner start,
+        // any token we hold gets Entered status — scanner won't re-send event.
+        let queued = token_set(&["btc_56k_token"]);
+        assert_eq!(
+            classify("btc_56k_token", &HashSet::new(), &queued),
+            ScanStatus::Entered,
+            "pre-queued token must not be submitted again"
+        );
+    }
+
+    #[test]
+    fn owned_takes_priority_over_pre_queued() {
+        // Both layers active: both should prevent re-entry; SkippedOwned wins.
+        let owned = token_set(&["tok"]);
+        let queued = token_set(&["tok"]);
+        assert_eq!(classify("tok", &owned, &queued), ScanStatus::SkippedOwned);
+    }
+
+    // The exact scenario that caused the triple-entry bug ------------------
+
+    #[test]
+    fn restart_scenario_no_reentry() {
+        // Simulate: scanner restarts, state.positions has "btc_56k" from wallet seed.
+        // already_queued is pre-populated from state.positions.
+        // Both checks prevent re-entry — scanner must not Monitoring this token.
+        let previously_held = token_set(&["btc_56k"]);
+
+        // Layer A: SkippedOwned via state.positions
+        let status_a = classify("btc_56k", &previously_held, &HashSet::new());
+        assert_ne!(
+            status_a,
+            ScanStatus::Monitoring,
+            "layer A: owned position must not be Monitoring on restart"
+        );
+
+        // Layer B: Entered via already_queued seeded from state.positions
+        let status_b = classify("btc_56k", &HashSet::new(), &previously_held);
+        assert_ne!(
+            status_b,
+            ScanStatus::Monitoring,
+            "layer B: pre-queued position must not be Monitoring on restart"
+        );
+    }
+
+    #[test]
+    fn fresh_unowned_token_still_enters_after_fix() {
+        // The fix must not block NEW entries.
+        // A token we don't hold and haven't queued should still be Monitoring.
+        let owned = token_set(&["other_token"]);
+        let queued = token_set(&["another_token"]);
+        assert_eq!(
+            classify("new_opportunity", &owned, &queued),
+            ScanStatus::Monitoring,
+            "unrelated new token must still be eligible for entry"
+        );
+    }
+}

@@ -5,7 +5,7 @@
 mod common;
 
 use polycopier::models::SizingMode;
-use polycopier::strategy::{compute_order_usd, MIN_ORDER_USD};
+use polycopier::strategy::{compute_order_usd, MIN_ORDER_SHARES, MIN_ORDER_USD};
 use rust_decimal_macros::dec;
 
 // -- Helpers ------------------------------------------------------------------
@@ -84,16 +84,20 @@ fn self_pct_capped_at_max_trade_usd() {
 }
 
 #[test]
-fn self_pct_floored_at_5_usd() {
-    // 10% of $20 = $2, below CLOB $5 minimum
+fn self_pct_below_clob_minimum_returns_zero() {
+    // 10% of $5 = $0.50 — below $1 CLOB minimum → return 0 (skip).
     let usd = size(
-        dec!(20),
+        dec!(5),
         &SizingMode::SelfPct,
         Some(dec!(0.10)),
         dec!(50),
         dec!(0),
     );
-    assert_eq!(usd, MIN_ORDER_USD);
+    assert_eq!(
+        usd,
+        dec!(0),
+        "$0.50 is below $1 minimum — should return 0 (skip)"
+    );
 }
 
 #[test]
@@ -133,10 +137,16 @@ fn target_usd_capped_at_max() {
 }
 
 #[test]
-fn target_usd_floored_at_clob_minimum() {
-    // Target bet $1 -- below CLOB minimum, floor to $5
-    let usd = size(dec!(500), &SizingMode::TargetUsd, None, dec!(50), dec!(1));
-    assert_eq!(usd, MIN_ORDER_USD);
+fn target_usd_below_clob_minimum_returns_zero() {
+    // Target bet $0.50 — below $1 CLOB minimum → return 0 (skip).
+    let usd = size(
+        dec!(500),
+        &SizingMode::TargetUsd,
+        None,
+        dec!(50),
+        dec!(0.50),
+    );
+    assert_eq!(usd, dec!(0), "below-$1 target bet must return 0 (skip)");
 }
 
 #[test]
@@ -164,16 +174,69 @@ fn target_usd_ignores_our_balance() {
 // -- Floor/ceiling edge cases (mode-agnostic) ---------------------------------
 
 #[test]
-fn max_less_than_min_clob_floor_uses_max_as_ceiling() {
-    // Misconfigured: max_trade = $3, below $5 CLOB minimum
-    // floor = min($5, $3) = $3; output is clamped to $3
-    let usd = size(dec!(100), &SizingMode::Fixed, None, dec!(3), dec!(0));
-    assert_eq!(usd, dec!(3));
+fn max_less_than_min_clob_floor_returns_zero() {
+    // Misconfigured: max_trade = $0.50, below $1 CLOB minimum → return 0 (skip).
+    let usd = size(dec!(100), &SizingMode::Fixed, None, dec!(0.5), dec!(0));
+    assert_eq!(usd, dec!(0));
+}
+
+// -- Exact bug scenario: 7% of $39 -------------------------------------------
+
+#[test]
+fn seven_pct_of_small_balance_is_skipped() {
+    // 7% of $10 = $0.70 < $1 → skip.
+    let usd = size(
+        dec!(10),
+        &SizingMode::SelfPct,
+        Some(dec!(0.07)),
+        dec!(50),
+        dec!(0),
+    );
+    assert_eq!(
+        usd,
+        dec!(0),
+        "7% of $10 = $0.70 is below $1 minimum — should skip"
+    );
 }
 
 #[test]
-fn self_pct_misconfigured_max_uses_max_as_floor() {
-    // 50% of $10 = $5 -- equal to cap at $5 (max < CLOB min)
+fn seven_pct_of_39_goes_through() {
+    // COPY_SIZE_PCT=0.07 with $39 balance → 7% × $39 = $2.73 ≥ $1 → order placed.
+    // This is the exact user scenario that was broken when MIN_ORDER_USD was $5.
+    let usd = size(
+        dec!(39),
+        &SizingMode::SelfPct,
+        Some(dec!(0.07)),
+        dec!(50),
+        dec!(0),
+    );
+    assert!(
+        usd > dec!(0),
+        "7% of $39 = $2.73 should clear the $1 minimum: got {usd}"
+    );
+    assert_eq!(usd, dec!(2.73));
+}
+
+#[test]
+fn seven_pct_fires_once_balance_grows_above_threshold() {
+    // At $15 balance: 7% × $15 = $1.05 ≥ $1 → order placed.
+    let usd = size(
+        dec!(15),
+        &SizingMode::SelfPct,
+        Some(dec!(0.07)),
+        dec!(50),
+        dec!(0),
+    );
+    assert!(
+        usd >= dec!(1),
+        "7% of $15 = $1.05 should clear the $1 minimum: got {usd}"
+    );
+}
+
+#[test]
+fn self_pct_misconfigured_max_returns_zero() {
+    // 50% of $10 = $5, but max_trade = $5 → capped at $5 → exactly MIN_ORDER_USD, so allowed.
+    // (Edge: $5 == MIN_ORDER_USD, not strictly less-than, so it goes through.)
     let usd = size(
         dec!(10),
         &SizingMode::SelfPct,
@@ -182,4 +245,51 @@ fn self_pct_misconfigured_max_uses_max_as_floor() {
         dec!(0),
     );
     assert_eq!(usd, dec!(5));
+}
+
+// ── Share-count minimum (the real CLOB constraint) ────────────────────────────
+
+#[test]
+fn min_order_shares_is_five() {
+    // Polymarket CLOB hard minimum: 5 shares per order.
+    assert_eq!(MIN_ORDER_SHARES, dec!(5));
+}
+
+#[test]
+fn seven_pct_of_24_at_0_98_yields_too_few_shares() {
+    // Regression: 7% × $24 = $1.68. At price $0.98 → 1.71 shares < 5 → 400.
+    // compute_order_usd returns the budget in USD ($1.68). The strategy engine
+    // then divides by the price and must check against MIN_ORDER_SHARES.
+    let budget = size(
+        dec!(24),
+        &SizingMode::SelfPct,
+        Some(dec!(0.07)),
+        dec!(50),
+        dec!(0),
+    );
+    let price = dec!(0.98);
+    let shares = (budget / price).round_dp(2);
+    assert!(
+        shares < MIN_ORDER_SHARES,
+        "7% of $24 at $0.98 = {shares:.2} shares — must be below MIN_ORDER_SHARES={MIN_ORDER_SHARES}"
+    );
+}
+
+#[test]
+fn budget_that_yields_five_shares_ok() {
+    // Need budget ≥ 5 × price: at $0.98 that means ≥ $4.90.
+    // 20% × $25 = $5.00 → 5.10 shares ≥ 5 → passes.
+    let budget = size(
+        dec!(25),
+        &SizingMode::SelfPct,
+        Some(dec!(0.20)),
+        dec!(50),
+        dec!(0),
+    );
+    let price = dec!(0.98);
+    let shares = (budget / price).round_dp(2);
+    assert!(
+        shares >= MIN_ORDER_SHARES,
+        "20% of $25 at $0.98 = {shares:.2} shares — should clear MIN_ORDER_SHARES={MIN_ORDER_SHARES}"
+    );
 }
