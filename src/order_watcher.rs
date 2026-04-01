@@ -115,7 +115,7 @@ async fn run_once(
                         continue;
                     }
 
-                    let pnl = p.percent_pnl;
+                    let pnl = p.percent_pnl / rust_decimal::Decimal::from(100);
                     let today = chrono::Utc::now().date_naive();
                     let redeemable = p.redeemable;
                     // Use < today (strictly past), NOT <= today.

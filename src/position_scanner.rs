@@ -276,11 +276,12 @@ async fn scan_positions(
 
         for pos in positions {
             let token_id = pos.asset.to_string();
+            let pnl_frac = pos.percent_pnl / Decimal::from(100);
 
             let status = classify_position(
                 &token_id,
                 pos.cur_price,
-                pos.percent_pnl,
+                pnl_frac,
                 pos.redeemable,
                 pos.end_date,
                 &our_token_ids,
@@ -296,7 +297,7 @@ async fn scan_positions(
                 pos.title,
                 status.label(),
                 pos.cur_price,
-                pos.percent_pnl * Decimal::from(100)
+                pos.percent_pnl
             );
 
             if status == ScanStatus::Monitoring && pos.avg_price > Decimal::ZERO {
@@ -314,7 +315,7 @@ async fn scan_positions(
                     timestamp: chrono::Utc::now().timestamp(),
                 };
                 // Gap 3 fix: store percent_pnl alongside the event for correct sorting.
-                to_enter.push((token_id.clone(), event, pos.percent_pnl));
+                to_enter.push((token_id.clone(), event, pnl_frac));
             }
 
             let title = if pos.title.chars().count() > 45 {
@@ -329,7 +330,7 @@ async fn scan_positions(
                 token_id,
                 cur_price: pos.cur_price,
                 avg_price: pos.avg_price,
-                percent_pnl: pos.percent_pnl,
+                percent_pnl: pnl_frac,
                 size: pos.size,
                 status,
                 source_wallet: wallet_str.to_string(),
