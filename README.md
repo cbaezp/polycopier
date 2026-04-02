@@ -1,6 +1,10 @@
 # polycopier
 
-![Polycopier](poly_img.png)
+<p align="center">
+  <img src="poly_ui.png" alt="Polycopier Web UI" width="48%">
+  &nbsp;
+  <img src="poly_img.png" alt="Polycopier Terminal UI" width="48%">
+</p>
 
 A high-performance, terminal-based copy trading bot for Polymarket prediction markets,
 built in Rust against the official [`polymarket-client-sdk`](https://github.com/Polymarket/rs-clob-client).
@@ -294,6 +298,9 @@ Edit `src/clients.rs` and change `SignatureType::Proxy` to match your setup.
 ## Usage
 
 ### Running Locally
+
+> [!NOTE]
+> For a comprehensive breakdown of every feature, refer to the detailed [Web UI Documentation](docs/WEB_UI.md) or the [Terminal UI & Daemon Documentation](docs/TUI.md).
 
 You can launch the bot in three distinct modes depending on how you prefer to configure and monitor it:
 
