@@ -45,7 +45,12 @@ export default function SettingsManager() {
         body: JSON.stringify(envData),
       });
 
-      setMessage("Saved successfully! Restart bot to apply.");
+      if (confirm("Settings successfully flushed to disk! The backend needs to reboot to initialize these parameters.\n\nRestart Daemon now? (Note: If not running under PM2/SystemD, this terminal will close and you must 'cargo run' manually.)")) {
+        await fetch("/api/action/restart", { method: "POST" });
+        setMessage("Daemon restart signal sent.");
+      } else {
+        setMessage("Saved successfully! Restart later to apply.");
+      }
     } catch (e) {
       setMessage("Failed to save.");
     }
