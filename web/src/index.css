@@ -287,6 +287,19 @@ tr:hover td {
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
+.field-hint {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  display: block;
+  margin-top: 0.25rem;
+  opacity: 0.8;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .settings-actions {
   display: flex;
   justify-content: flex-end;

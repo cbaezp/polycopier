@@ -56,14 +56,15 @@ export default function SettingsManager() {
     }
   };
 
-  if (!config || !envData) return <div className="loading">Loading Settings...</div>;
+  if (!config || !envData) return <div className="loading-container"><div className="spinner"></div><div>Loading Control Center...</div></div>;
+
+  const isSelfPct = config.sizing.mode === "self_pct";
+  const hasLossGuard = parseInt(config.risk.max_consecutive_losses || 0) > 0;
 
   return (
     <div className="settings-container">
       <div className="glass-panel" style={{ marginBottom: "1.5rem" }}>
-        <div className="panel-header">
-          Environment Secrets (.env)
-        </div>
+        <div className="panel-header">Environment Secrets</div>
         <div className="form-group">
           <label>Private Key (Polymarket Signer)</label>
           <input
@@ -85,86 +86,180 @@ export default function SettingsManager() {
       </div>
 
       <div className="grid-cols-2">
-        <div className="glass-panel">
-          <div className="panel-header">Targets (config.toml)</div>
-          <div className="form-group">
-            <label>Wallets to Copy (comma separated)</label>
-            <textarea
-              rows={4}
-              value={Array.isArray(config.targets.wallets) ? config.targets.wallets.join(",\n") : config.targets.wallets}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  targets: { ...config.targets, wallets: e.target.value },
-                })
-              }
-            />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div className="glass-panel">
+            <div className="panel-header">Targets Network</div>
+            <div className="form-group">
+              <label>Wallets to Copy (comma separated)</label>
+              <textarea
+                rows={4}
+                value={Array.isArray(config.targets.wallets) ? config.targets.wallets.join(",\n") : config.targets.wallets}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    targets: { ...config.targets, wallets: e.target.value },
+                  })
+                }
+              />
+              <span className="field-hint">The proxy wallets tracked by the websocket listener natively.</span>
+            </div>
+            <div className="form-group" style={{ marginTop: '1rem' }}>
+              <label>Max Websocket Delay (Staleness filter)</label>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  type="number"
+                  style={{ width: '100px' }}
+                  value={config.execution.max_delay_seconds}
+                  onChange={(e) =>
+                    setConfig({ ...config, execution: { ...config.execution, max_delay_seconds: parseInt(e.target.value) } })
+                  }
+                />
+                <span className="field-hint">seconds</span>
+              </div>
+            </div>
           </div>
 
-          <div className="panel-header" style={{ marginTop: "1rem" }}>Scanner Tuning</div>
-          <div className="form-group">
-            <label>Max Copy Loss Pct (e.g. 0.40 = 40%)</label>
-            <input
-              type="text"
-              value={config.scanner.max_copy_loss_pct}
-              onChange={(e) =>
-                setConfig({ ...config, scanner: { ...config.scanner, max_copy_loss_pct: e.target.value } })
-              }
-            />
-          </div>
-          <div className="form-group">
-            <label>Max Entries Per Cycle</label>
-            <input
-              type="number"
-              value={config.scanner.max_entries_per_cycle}
-              onChange={(e) =>
-                setConfig({ ...config, scanner: { ...config.scanner, max_entries_per_cycle: parseInt(e.target.value) } })
-              }
-            />
+          <div className="glass-panel">
+            <div className="panel-header">Scanner Tuning</div>
+            <div className="form-group">
+              <label>Max Entries Per Scan Cycle</label>
+              <input
+                type="number"
+                style={{ width: '100px' }}
+                value={config.scanner.max_entries_per_cycle}
+                onChange={(e) =>
+                  setConfig({ ...config, scanner: { ...config.scanner, max_entries_per_cycle: parseInt(e.target.value) } })
+                }
+              />
+              <span className="field-hint">How many concurrent Catch-up buys the scanner drops onto the CLOB simultaneously.</span>
+            </div>
+            <div className="form-group" style={{ marginTop: '1rem' }}>
+              <label>Max Copy Loss Pct (e.g. 0.40 = 40%)</label>
+              <input
+                type="text"
+                value={config.scanner.max_copy_loss_pct}
+                onChange={(e) =>
+                  setConfig({ ...config, scanner: { ...config.scanner, max_copy_loss_pct: e.target.value } })
+                }
+              />
+              <span className="field-hint">Skips Catch-Up scanning if target's position is deeply underwater.</span>
+            </div>
+            <div className="form-group" style={{ marginTop: '1rem' }}>
+              <label>Entry Price Dust Filter</label>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  placeholder="Min"
+                  value={config.scanner.min_entry_price}
+                  onChange={(e) => setConfig({ ...config, scanner: { ...config.scanner, min_entry_price: e.target.value } })}
+                />
+                <span>to</span>
+                <input
+                  type="text"
+                  placeholder="Max"
+                  value={config.scanner.max_entry_price}
+                  onChange={(e) => setConfig({ ...config, scanner: { ...config.scanner, max_entry_price: e.target.value } })}
+                />
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="glass-panel">
-          <div className="panel-header">Execution & Risk</div>
-          <div className="form-group">
-            <label>Max Slippage Pct (e.g. 0.02 = 2%)</label>
-            <input
-              type="text"
-              value={config.execution.max_slippage_pct}
-              onChange={(e) =>
-                setConfig({ ...config, execution: { ...config.execution, max_slippage_pct: e.target.value } })
-              }
-            />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div className="glass-panel">
+            <div className="panel-header">Sizing Engine</div>
+            <div className="form-group">
+              <label>Sizing Strategy Mode</label>
+              <select
+                value={config.sizing.mode}
+                onChange={(e) => setConfig({ ...config, sizing: { ...config.sizing, mode: e.target.value } })}
+              >
+                <option value="fixed">Fixed (Enforce Max Trade Size)</option>
+                <option value="self_pct">Self Percentage (Fraction of our balance)</option>
+                <option value="target_usd">Mirror Target USD (Proportional size)</option>
+              </select>
+            </div>
+            
+            {isSelfPct && (
+              <div className="form-group dynamic-field" style={{ animation: 'fadeIn 0.3s' }}>
+                <label style={{ color: 'var(--accent-primary)' }}>Our Balance Allocation (Copy Size Pct)</label>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    value={config.sizing.copy_size_pct || "0.10"}
+                    onChange={(e) =>
+                      setConfig({ ...config, sizing: { ...config.sizing, copy_size_pct: e.target.value } })
+                    }
+                  />
+                  <span className="field-hint">Fraction of our total available balance to deploy (e.g. 0.15 = 15%).</span>
+                </div>
+              </div>
+            )}
+
+            <div className="form-group" style={{ marginTop: isSelfPct ? '0' : '1rem' }}>
+              <label>Max Trade Ceiling (Safety Stop)</label>
+              <input
+                type="text"
+                value={config.execution.max_trade_size_usd}
+                onChange={(e) =>
+                  setConfig({ ...config, execution: { ...config.execution, max_trade_size_usd: e.target.value } })
+                }
+              />
+              <span className="field-hint">Regardless of algorithm, a single entry will never exceed this USD value limit.</span>
+            </div>
           </div>
-          <div className="form-group">
-            <label>Max Trade Size USD ($)</label>
-            <input
-              type="text"
-              value={config.execution.max_trade_size_usd}
-              onChange={(e) =>
-                setConfig({ ...config, execution: { ...config.execution, max_trade_size_usd: e.target.value } })
-              }
-            />
-          </div>
-          <div className="form-group">
-            <label>Sizing Mode</label>
-            <select
-              value={config.sizing.mode}
-              onChange={(e) => setConfig({ ...config, sizing: { ...config.sizing, mode: e.target.value } })}
-            >
-              <option value="fixed">Fixed (Max Trade Size)</option>
-              <option value="self_pct">Self Percentage</option>
-              <option value="target_usd">Mirror Target USD</option>
-            </select>
+
+          <div className="glass-panel">
+            <div className="panel-header">Risk Guards</div>
+            <div className="form-group">
+              <label>Slippage Aggression</label>
+              <input
+                type="text"
+                value={config.execution.max_slippage_pct}
+                onChange={(e) =>
+                  setConfig({ ...config, execution: { ...config.execution, max_slippage_pct: e.target.value } })
+                }
+              />
+              <span className="field-hint">Price buffer to guarantee limit executions. (e.g. 0.02 = 2%)</span>
+            </div>
+
+            <div className="form-group" style={{ marginTop: '1rem' }}>
+              <label>Systemic Cooldown Triggers: Max Consecutive Losses</label>
+              <input
+                type="number"
+                value={config.risk.max_consecutive_losses}
+                onChange={(e) =>
+                  setConfig({ ...config, risk: { ...config.risk, max_consecutive_losses: parseInt(e.target.value) } })
+                }
+              />
+              <span className="field-hint">0 disables this kill-switch completely.</span>
+            </div>
+
+            {hasLossGuard && (
+              <div className="form-group dynamic-field" style={{ animation: 'fadeIn 0.3s' }}>
+                <label style={{ color: 'var(--accent-danger)' }}>Loss Trigger Cooldown Window</label>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <input
+                    type="number"
+                    style={{ width: '100px' }}
+                    value={config.risk.loss_cooldown_secs}
+                    onChange={(e) =>
+                      setConfig({ ...config, risk: { ...config.risk, loss_cooldown_secs: parseInt(e.target.value) } })
+                    }
+                  />
+                  <span className="field-hint">seconds timeout until strategy engine resumes parsing WS events.</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      <div className="settings-actions">
+      <div className="settings-actions" style={{ position: 'sticky', bottom: '-1px', background: 'var(--bg-secondary)', padding: '1rem', borderTop: '1px solid var(--border)', zIndex: 10 }}>
+        <button className="btn btn-danger" onClick={handleRestart} style={{ marginRight: 'auto' }}>Force Restart Daemon</button>
         {message && <span className="message">{message}</span>}
-        <button className="btn btn-danger" onClick={handleRestart}>Force Restart</button>
         <button className="btn btn-primary" onClick={handleSave} disabled={isSaving}>
-          {isSaving ? "Saving..." : "Save Settings"}
+          {isSaving ? "Writing configs..." : "Save Configuration System"}
         </button>
       </div>
     </div>
