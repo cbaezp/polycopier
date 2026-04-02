@@ -409,7 +409,7 @@ fn migrate_from_env(defaults: BotConfig) -> BotConfig {
 // ---------------------------------------------------------------------------
 
 impl Config {
-    pub async fn load_or_prompt() -> anyhow::Result<Self> {
+    pub async fn load_or_prompt(is_ui: bool) -> anyhow::Result<Self> {
         // Load .env (secrets + any legacy tunable keys)
         let _ = dotenvy::dotenv();
 
@@ -421,31 +421,41 @@ impl Config {
         // We re-prompt if the key fails this check so the alloy SDK never sees a
         // short/invalid key and crashes with the opaque "invalid string length" error.
 
+        let funder_address = match env::var("FUNDER_ADDRESS")
+            .ok()
+            .filter(|v| !is_placeholder(v) && !v.is_empty())
+        {
+            Some(v) => v,
+            None => {
+                if is_ui {
+                    tracing::info!("Web UI Setup Mode active! Please complete your configuration in the browser at http://localhost:3000");
+                    std::future::pending::<()>().await;
+                }
+
+                write_new_env = true;
+                Text::new("Enter your Polymarket Funder Address (Gnosis Safe / Proxy):")
+                    .prompt()
+                    .unwrap_or_default()
+            }
+        };
+
         let private_key = match env::var("PRIVATE_KEY")
             .ok()
             .filter(|v| !is_placeholder(v) && is_valid_private_key_format(v))
         {
             Some(v) => v,
             None => {
+                if is_ui {
+                    tracing::info!("Web UI Setup Mode active! Please complete your configuration in the browser at http://localhost:3000");
+                    std::future::pending::<()>().await;
+                }
+
                 write_new_env = true;
                 println!(
                     "PRIVATE_KEY is missing or invalid. A valid key is 64 hex chars (32 bytes)."
                 );
                 Password::new("Enter your Polymarket Signer Private Key (Hidden):")
                     .without_confirmation()
-                    .prompt()
-                    .unwrap_or_default()
-            }
-        };
-
-        let funder_address = match env::var("FUNDER_ADDRESS")
-            .ok()
-            .filter(|v| !is_placeholder(v))
-        {
-            Some(v) => v,
-            None => {
-                write_new_env = true;
-                Text::new("Enter your Polymarket Funder Address (Gnosis Safe / Proxy):")
                     .prompt()
                     .unwrap_or_default()
             }
@@ -493,7 +503,7 @@ impl Config {
         // (Either first run with no legacy TARGET_WALLETS, or config.toml
         //  was manually created without a [targets] section.)
         let mut prompted_targets = false;
-        let toml_cfg = if toml_cfg.targets.wallets.is_empty() {
+        let toml_cfg = if toml_cfg.targets.wallets.is_empty() && !is_ui {
             prompted_targets = true;
             let raw = Text::new("Enter Target Wallets to copy-trade (comma separated):")
                 .prompt()
@@ -547,7 +557,7 @@ impl Config {
                  Set it in .env or re-run to be prompted."
             );
         }
-        if toml_cfg.targets.wallets.is_empty() {
+        if toml_cfg.targets.wallets.is_empty() && !is_ui {
             anyhow::bail!(
                 "No target wallets configured.\n\
                  Add addresses to [targets].wallets in config.toml or re-run to be prompted."
@@ -600,5 +610,30 @@ impl Config {
         let funder_address = env::var("FUNDER_ADDRESS").unwrap_or_default();
         let cfg = load_toml().unwrap_or_default();
         Ok(Self::from_parts(private_key, funder_address, cfg))
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// CLI Parsing Logic (Extracted for Testing)
+// ────────────────────────────────────────────────────────────────────────
+
+pub struct CliArgs {
+    pub is_daemon: bool,
+    pub is_ui: bool,
+    pub skip_open: bool,
+    pub headless: bool,
+}
+
+pub fn parse_cli_args(args: &[String]) -> CliArgs {
+    let is_daemon = args.iter().any(|a| a == "--daemon" || a == "--headless");
+    let is_ui = args.iter().any(|a| a == "--ui" || a == "--ui-reboot");
+    let skip_open = args.iter().any(|a| a == "--ui-reboot");
+    let headless = is_daemon || is_ui;
+
+    CliArgs {
+        is_daemon,
+        is_ui,
+        skip_open,
+        headless,
     }
 }

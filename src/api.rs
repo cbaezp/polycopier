@@ -3,6 +3,7 @@ use crate::models::{EvaluatedTrade, Position, TargetPosition};
 use crate::state::BotState;
 use axum::{
     extract::{Json, State},
+    response::IntoResponse,
     routing::{get, post},
     Router,
 };
@@ -15,7 +16,71 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 pub struct ApiState {
     pub bot_state: Arc<RwLock<BotState>>,
+    pub copy_ledger: Arc<tokio::sync::Mutex<crate::copy_ledger::CopyLedger>>,
 }
+
+// ── SETUP ROUTER (when .env is missing) ───────────────────────────────────
+
+pub fn create_setup_router() -> Router {
+    Router::new()
+        .route(
+            "/api/state",
+            get(|| async { axum::Json(serde_json::json!({ "status": "setup_required" })) }),
+        )
+        .route("/api/setup", post(handle_setup))
+        .fallback_service(
+            tower_http::services::ServeDir::new("web/dist").append_index_html_on_directories(true),
+        )
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetupPayload {
+    pub private_key: String,
+    pub funder_address: String,
+}
+
+async fn handle_setup(Json(payload): Json<SetupPayload>) -> axum::response::Response {
+    use crate::config::{BotConfig, TargetsConfig};
+    use std::io::Write;
+
+    // 1. Write the genuine secrets to `.env`
+    if let Ok(mut env_file) = std::fs::File::create(".env") {
+        let _ = writeln!(env_file, "PRIVATE_KEY=\"{}\"", payload.private_key);
+        let _ = writeln!(env_file, "FUNDER_ADDRESS=\"{}\"", payload.funder_address);
+    }
+
+    // 2. Initialize default config.toml (Target Wallets can be configured later in UI)
+    let default_cfg = BotConfig {
+        targets: TargetsConfig { wallets: vec![] },
+        ..Default::default()
+    };
+    let _ = crate::config::write_toml(&default_cfg);
+
+    // Force a semantic wait to ensure file flush
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Trigger seamless hot reboot after a short delay so the HTTP response returns cleanly
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let exe = std::env::current_exe().unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let err = std::process::Command::new(&exe).arg("--ui-reboot").exec();
+            tracing::error!("Seamless setup reboot failed: {}", err);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = std::process::Command::new(&exe).arg("--ui-reboot").spawn();
+            std::process::exit(0);
+        }
+    });
+
+    axum::Json(serde_json::json!({ "success": true })).into_response()
+}
+
+// ────────────────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 pub struct StateResponse {
@@ -30,10 +95,19 @@ pub struct StateResponse {
     pub copied_count: usize,
     pub next_scan_secs: u64,
     pub pending_orders: std::collections::HashMap<String, crate::models::QueuedOrder>,
+    pub position_sources: HashMap<String, String>,
 }
 
 async fn get_state(State(api_state): State<ApiState>) -> Json<StateResponse> {
     let guard = api_state.bot_state.read().await;
+    let ledger = api_state.copy_ledger.lock().await;
+
+    let mut position_sources = HashMap::new();
+    for token_id in guard.positions.keys() {
+        if let Some(entry) = ledger.find_active_for_token(token_id) {
+            position_sources.insert(token_id.clone(), entry.source_wallet.clone());
+        }
+    }
 
     // Convert current state to serializable DTO, stripping Instants
     let response = StateResponse {
@@ -48,6 +122,7 @@ async fn get_state(State(api_state): State<ApiState>) -> Json<StateResponse> {
         copied_count: guard.copied_count,
         next_scan_secs: guard.next_scan_secs,
         pending_orders: guard.pending_orders.clone(),
+        position_sources,
     };
 
     Json(response)
@@ -120,7 +195,10 @@ async fn restart() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "success": true }))
 }
 
-pub fn create_router(bot_state: Arc<RwLock<BotState>>) -> Router {
+pub fn create_router(
+    bot_state: Arc<RwLock<BotState>>,
+    copy_ledger: Arc<tokio::sync::Mutex<crate::copy_ledger::CopyLedger>>,
+) -> Router {
     use tower_http::cors::{Any, CorsLayer};
     use tower_http::services::{ServeDir, ServeFile};
 
@@ -129,7 +207,10 @@ pub fn create_router(bot_state: Arc<RwLock<BotState>>) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let state = ApiState { bot_state };
+    let state = ApiState {
+        bot_state,
+        copy_ledger,
+    };
 
     let root_path = std::env::current_dir().unwrap().join("web/dist");
     let serve_dir =

@@ -205,20 +205,30 @@ export default function SettingsManager() {
             <div className="form-group" style={{ marginTop: '1rem' }}>
               <label>Entry Price Dust Filter</label>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>$</span>
                 <input
                   type="text"
                   placeholder="Min"
+                  style={{ width: '80px' }}
                   value={config.scanner.min_entry_price}
                   onChange={(e) => setConfig({ ...config, scanner: { ...config.scanner, min_entry_price: e.target.value } })}
                 />
                 <span>to</span>
+                <span style={{ color: 'var(--text-secondary)' }}>$</span>
                 <input
                   type="text"
                   placeholder="Max"
+                  style={{ width: '80px' }}
                   value={config.scanner.max_entry_price}
                   onChange={(e) => setConfig({ ...config, scanner: { ...config.scanner, max_entry_price: e.target.value } })}
                 />
               </div>
+              <span className="field-hint" style={{ display: 'block', marginTop: '0.5rem' }}>
+                <strong>Min Filter:</strong> Ignores dead markets (e.g. $0.01) so you don't accumulate abandoned losing tickets from the target's wallet.
+              </span>
+              <span className="field-hint" style={{ display: 'block', marginTop: '0.25rem' }}>
+                <strong>Max Filter:</strong> Ignores fully-realized winning markets (e.g. $0.99) to prevent risking capital for pennies.
+              </span>
             </div>
           </div>
         </div>
@@ -239,31 +249,46 @@ export default function SettingsManager() {
             </div>
             
             {isSelfPct && (
-              <div className="form-group dynamic-field" style={{ animation: 'fadeIn 0.3s' }}>
+              <div className="form-group dynamic-field" style={{ animation: 'fadeIn 0.3s', marginTop: '1rem' }}>
                 <label style={{ color: 'var(--accent-primary)' }}>Our Balance Allocation (Copy Size Pct)</label>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                   <input
-                    type="text"
-                    value={config.sizing.copy_size_pct || "0.10"}
+                    type="range"
+                    min="0" max="1.0" step="0.01"
+                    value={parseFloat(config.sizing.copy_size_pct || "0.10")}
                     onChange={(e) =>
                       setConfig({ ...config, sizing: { ...config.sizing, copy_size_pct: e.target.value } })
                     }
+                    style={{ flex: 1 }}
                   />
-                  <span className="field-hint">Fraction of our total available balance to deploy (e.g. 0.15 = 15%).</span>
+                  <span style={{ fontSize: '1.2rem', fontWeight: 600, minWidth: '60px', color: 'var(--accent-primary)' }}>
+                    {((parseFloat(config.sizing.copy_size_pct || "0.10")) * 100).toFixed(0)}%
+                  </span>
                 </div>
+                <span className="field-hint" style={{ display: 'block', marginTop: '0.25rem' }}>
+                  Fraction of our total available balance to deploy on each copied trade.
+                </span>
               </div>
             )}
 
-            <div className="form-group" style={{ marginTop: isSelfPct ? '0' : '1rem' }}>
+            <div className="form-group" style={{ marginTop: isSelfPct ? '1.5rem' : '1rem' }}>
               <label>Max Trade Ceiling (Safety Stop)</label>
-              <input
-                type="text"
-                value={config.execution.max_trade_size_usd}
-                onChange={(e) =>
-                  setConfig({ ...config, execution: { ...config.execution, max_trade_size_usd: e.target.value } })
-                }
-              />
-              <span className="field-hint">Regardless of algorithm, a single entry will never exceed this USD value limit.</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-secondary)' }}>$</span>
+                <input
+                  type="number"
+                  min="5"
+                  style={{ width: '120px' }}
+                  value={config.execution.max_trade_size_usd}
+                  onChange={(e) =>
+                    setConfig({ ...config, execution: { ...config.execution, max_trade_size_usd: e.target.value } })
+                  }
+                />
+                <span>USD</span>
+              </div>
+              <span className="field-hint" style={{ display: 'block', marginTop: '0.25rem' }}>
+                Regardless of the algorithm above, a single entry will <strong>never</strong> exceed this absolute USD value cap. This strictly safeguards your balance.
+              </span>
             </div>
           </div>
 
