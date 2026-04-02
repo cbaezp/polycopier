@@ -115,8 +115,9 @@ pub fn create_router(bot_state: Arc<RwLock<BotState>>) -> Router {
 
     let state = ApiState { bot_state };
 
-    // Serve static files from the build artifacts
-    let serve_dir = ServeDir::new("web/dist").fallback(ServeFile::new("web/dist/index.html"));
+    let root_path = std::env::current_dir().unwrap().join("web/dist");
+    let serve_dir =
+        ServeDir::new(&root_path).fallback(ServeFile::new(root_path.join("index.html")));
 
     Router::new()
         .route("/api/state", get(get_state))

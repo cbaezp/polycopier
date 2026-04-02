@@ -174,10 +174,21 @@ async fn main() -> anyhow::Result<()> {
     // ── Local Web API Server ──────────────────────────────────────────────────
     let api_router = api::create_router(state.clone());
     tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
-            .await
-            .unwrap();
-        axum::serve(listener, api_router).await.unwrap();
+        match tokio::net::TcpListener::bind("127.0.0.1:3000").await {
+            Ok(listener) => {
+                if let Err(e) = axum::serve(listener, api_router).await {
+                    tracing::error!("Local API Server crashed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    "FATAL: Could not bind to Port 3000. Is another instance of Polycopier already running? Error: {}",
+                    e
+                );
+                std::process::exit(1);
+            }
+        }
     });
 
     // ── Main thread: TUI or headless wait ─────────────────────────────────────
