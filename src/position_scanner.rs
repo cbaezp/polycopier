@@ -348,10 +348,16 @@ async fn scan_positions(
                 .map(|p| p.avg_price)
                 .unwrap_or(ev.price);
             let target_notional = pos_avg * ev.size;
+            let wallet_scalar = config
+                .target_scalars
+                .get(&ev.maker_address)
+                .cloned()
+                .unwrap_or(Decimal::ONE);
             let budget_usd = compute_order_usd(
                 current_balance,
                 &config.sizing_mode,
                 config.copy_size_pct,
+                wallet_scalar,
                 config.max_trade_size_usd,
                 target_notional,
             );

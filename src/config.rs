@@ -147,7 +147,9 @@ pub struct Config {
     pub chain_id: u64,
 
     // Target wallets (from config.toml [targets].wallets)
+    // Target wallets (from config.toml [targets].wallets)
     pub target_wallets: Vec<String>,
+    pub target_scalars: std::collections::HashMap<String, Decimal>,
 
     // Tunables (from config.toml)
     pub max_slippage_pct: Decimal,
@@ -569,13 +571,25 @@ impl Config {
 
     /// Build a flat [`Config`] from secrets + a [`BotConfig`].
     fn from_parts(private_key: String, funder_address: String, cfg: BotConfig) -> Self {
-        let target_wallets = cfg
-            .targets
-            .wallets
-            .iter()
-            .map(|s| s.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let mut target_wallets = Vec::new();
+        let mut target_scalars = std::collections::HashMap::new();
+
+        for entry in cfg.targets.wallets.iter() {
+            let s = entry.trim().to_lowercase();
+            if s.is_empty() {
+                continue;
+            }
+            if let Some((addr, scalar_str)) = s.split_once(':') {
+                let clean_addr = addr.trim().to_string();
+                target_wallets.push(clean_addr.clone());
+                let scalar = rust_decimal::Decimal::from_str(scalar_str.trim())
+                    .unwrap_or(rust_decimal::Decimal::ONE);
+                target_scalars.insert(clean_addr, scalar);
+            } else {
+                target_wallets.push(s.clone());
+                target_scalars.insert(s, rust_decimal::Decimal::ONE);
+            }
+        }
 
         let sizing_mode = SizingMode::from_mode_str(&cfg.sizing.mode);
 
@@ -584,6 +598,7 @@ impl Config {
             funder_address,
             chain_id: 137,
             target_wallets,
+            target_scalars,
             max_slippage_pct: cfg.execution.max_slippage_pct,
             max_trade_size_usd: cfg.execution.max_trade_size_usd,
             max_delay_seconds: cfg.execution.max_delay_seconds,

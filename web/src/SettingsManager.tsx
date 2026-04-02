@@ -95,19 +95,48 @@ export default function SettingsManager() {
             <div className="panel-header">Targets Network</div>
             <div className="form-group">
               <label>Wallets to Copy</label>
-              {(Array.isArray(config.targets.wallets) ? config.targets.wallets : []).map((w: string, idx: number) => (
+              <p className="field-hint" style={{ marginBottom: '1rem' }}>
+                Add proxy wallet addresses to copy trade. When using the <strong>Target Scalar</strong> sizing mode, you can select exactly what percentage of their order size you want to copy.
+                <br/><span style={{ opacity: 0.8, marginTop: '2px', display: 'block' }}><em>Example: If a whale bets $500 with a $100k portfolio and you have $1k (1%), setting this to <strong>1%</strong> will perfectly scale that same bet down to $5 for you.</em></span>
+              </p>
+              {(Array.isArray(config.targets.wallets) ? config.targets.wallets : []).map((w: string, idx: number) => {
+                const parts = w.split(':');
+                const cleanWallet = parts[0] || "";
+                const cleanScalar = parts.length > 1 ? parts[1] : "1.0";
+                
+                return (
                 <div key={idx} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
                   <input
                     type="text"
-                    value={w}
+                    value={cleanWallet}
                     onChange={(e) => {
                       const newWallets = [...config.targets.wallets];
-                      newWallets[idx] = e.target.value;
+                      newWallets[idx] = `${e.target.value}:${cleanScalar}`;
                       setConfig({ ...config, targets: { ...config.targets, wallets: newWallets }});
                     }}
                     placeholder="0x..."
                     style={{ flex: 1 }}
                   />
+                  {config.sizing?.mode === 'target_scalar' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--panel-bg)', padding: '0 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color)', minWidth: '130px' }}>
+                      <span style={{color: 'var(--text-secondary)', fontSize: '0.9rem'}}>Copy</span>
+                      <input
+                        type="number"
+                        step="1"
+                        min="0.1"
+                        value={parseFloat(cleanScalar) * 100}
+                        onChange={(e) => {
+                          const val = Math.max(0, parseFloat(e.target.value) || 0);
+                          const scaled = (val / 100).toFixed(4).replace(/\.?0+$/, '');
+                          const newWallets = [...config.targets.wallets];
+                          newWallets[idx] = `${cleanWallet}:${scaled}`;
+                          setConfig({ ...config, targets: { ...config.targets, wallets: newWallets }});
+                        }}
+                        style={{ width: '40px', background: 'transparent', border: 'none', padding: '0', textAlign: 'right', fontWeight: 'bold' }}
+                      />
+                      <span style={{color: 'var(--text-secondary)', fontSize: '0.9rem', paddingRight: '0.25rem'}}>%</span>
+                    </div>
+                  )}
                   <button
                     className="btn btn-secondary"
                     onClick={() => {
@@ -118,7 +147,7 @@ export default function SettingsManager() {
                     X
                   </button>
                 </div>
-              ))}
+              )})}
               <button
                 className="btn btn-primary"
                 style={{ marginTop: '0.5rem', alignSelf: 'flex-start' }}
@@ -244,7 +273,8 @@ export default function SettingsManager() {
               >
                 <option value="fixed">Fixed (Enforce Max Trade Size)</option>
                 <option value="self_pct">Self Percentage (Fraction of our balance)</option>
-                <option value="target_usd">Mirror Target USD (Proportional size)</option>
+                <option value="target_usd">Mirror Target USD (Proportional dollar size)</option>
+                <option value="target_scalar">Target Scalar (Scale target dollar amount)</option>
               </select>
             </div>
             

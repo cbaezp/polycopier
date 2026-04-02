@@ -12,6 +12,7 @@ fn test_config() -> Config {
         funder_address: "0x1111111111111111111111111111111111111111".to_string(),
         chain_id: 137,
         target_wallets: vec!["0xabc".to_string()],
+        target_scalars: std::collections::HashMap::new(),
         max_slippage_pct: dec!(0.02),
         max_trade_size_usd: dec!(50),
         max_delay_seconds: 2,

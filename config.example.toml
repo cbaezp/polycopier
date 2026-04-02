@@ -7,9 +7,10 @@
 [targets]
 # Polymarket proxy wallet addresses to copy-trade.
 # Add one or more addresses as a TOML array.
+# (Optional) append `:scalar` to proportionally drop their sizing in target_scalar mode!
 wallets = [
   "0xTargetWalletAddress1Here",
-  # "0xOptionalSecondWallet",
+  # "0xOptionalSecondWallet:0.01",
 ]
 
 [execution]
@@ -23,10 +24,11 @@ max_delay_seconds = 10
 sell_fee_buffer = 0.97
 
 [sizing]
-# Sizing algorithm: "self_pct" | "target_usd" | "fixed"
-#   self_pct   -- spend copy_size_pct% of YOUR balance per trade
-#   target_usd -- mirror the target's exact USD notional (capped at max_trade_size_usd)
-#   fixed      -- always spend exactly max_trade_size_usd
+# Sizing algorithm: "self_pct" | "target_usd" | "target_scalar" | "fixed"
+#   self_pct      -- spend copy_size_pct% of YOUR balance per trade
+#   target_usd    -- mirror the target's exact USD notional (capped at max_trade_size_usd)
+#   target_scalar -- scale their bet multiplier (e.g. 0.01 = 1% of their $500 = $5 sized order)
+#   fixed         -- always spend exactly max_trade_size_usd
 mode = "self_pct"
 # Fraction of our balance to use per trade for self_pct mode (0.15 = 15%)
 copy_size_pct = 0.15

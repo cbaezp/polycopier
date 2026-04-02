@@ -125,8 +125,8 @@ impl SettingsScreen {
             SettingsField::new(
                 "Target Wallets",
                 "targets.wallets",
-                "",
-                "Polymarket proxy addresses to copy-trade (comma-separated)",
+                "0xabc:1.0, 0xdef:0.01",
+                "Proxy addresses to copy. Append ':scalar' to fractional scale (e.g. 0xabc:0.01)",
                 false,
             ),
             SettingsField::new(
