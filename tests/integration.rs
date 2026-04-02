@@ -265,6 +265,21 @@ mod state_tests {
     }
 
     #[test]
+    fn redundant_evaluated_trades_are_debounced() {
+        let mut state = BotState::new();
+        let eval = make_eval(false); // simulates a rejected trade
+
+        // Blast the exact same event 50 times in a row
+        for _ in 0..50 {
+            state.push_evaluated_trade(eval.clone());
+        }
+
+        // The exact same reason/token/validation shouldn't continuously increment!
+        assert_eq!(state.trades_skipped, 1);
+        assert_eq!(state.live_feed.len(), 1);
+    }
+
+    #[test]
     fn target_positions_default_is_empty() {
         let state = BotState::new();
         assert!(state.target_positions.is_empty());
