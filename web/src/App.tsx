@@ -8,7 +8,7 @@ function App() {
   useEffect(() => {
     const fetchState = async () => {
       try {
-        const res = await fetch('http://localhost:3000/api/state');
+        const res = await fetch('/api/state');
         const data = await res.json();
         setState(data);
       } catch (err) {

@@ -7,10 +7,10 @@ export default function SettingsManager() {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    fetch("http://localhost:3000/api/config")
+    fetch("/api/config")
       .then((res) => res.json())
       .then(setConfig);
-    fetch("http://localhost:3000/api/env")
+    fetch("/api/env")
       .then((res) => res.json())
       .then(setEnvData);
   }, []);
@@ -29,13 +29,13 @@ export default function SettingsManager() {
           .filter(Boolean);
       }
 
-      await fetch("http://localhost:3000/api/config", {
+      await fetch("/api/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payloadConfig),
       });
 
-      await fetch("http://localhost:3000/api/env", {
+      await fetch("/api/env", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(envData),
@@ -51,7 +51,7 @@ export default function SettingsManager() {
 
   const handleRestart = async () => {
     if (confirm("The bot will self-terminate. You must restart it manually via cargo run if not using a daemon. Proceed?")) {
-      await fetch("http://localhost:3000/api/action/restart", { method: "POST" });
+      await fetch("/api/action/restart", { method: "POST" });
       setMessage("Bot stopped.");
     }
   };
