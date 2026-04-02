@@ -24,6 +24,7 @@ fn test_config() -> polycopier::config::Config {
         funder_address: "0x1111111111111111111111111111111111111111".to_string(),
         chain_id: 137,
         target_wallets: vec!["0xabc".to_string()],
+        target_scalars: std::collections::HashMap::new(),
         max_slippage_pct: dec!(0.02),
         max_trade_size_usd: dec!(10.00),
         max_delay_seconds: 2,
@@ -2004,8 +2005,22 @@ mod scan_max_entries_tests {
     #[test]
     fn compute_order_usd_returns_positive_for_multiple_positions() {
         let balance = dec!(100);
-        let budget1 = compute_order_usd(balance, &SizingMode::Fixed, None, dec!(10), dec!(5));
-        let budget2 = compute_order_usd(balance, &SizingMode::Fixed, None, dec!(10), dec!(8));
+        let budget1 = compute_order_usd(
+            balance,
+            &SizingMode::Fixed,
+            None,
+            dec!(1.0),
+            dec!(10),
+            dec!(5),
+        );
+        let budget2 = compute_order_usd(
+            balance,
+            &SizingMode::Fixed,
+            None,
+            dec!(1.0),
+            dec!(10),
+            dec!(8),
+        );
         assert!(budget1 > dec!(0));
         assert!(budget2 > dec!(0));
         // Both independent — scanner can queue both if max_entries >= 2

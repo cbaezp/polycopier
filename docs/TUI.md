@@ -18,7 +18,7 @@ Showcases exact network polling metrics orchestrating your execution environment
 ### TUI Interactivity & Hot Reloading
 You can press `s` inside the Terminal to open the built-in Console Settings Manager. It offers an intuitive form driven by the `inquire` library, letting you dynamically modify:
 *   **Target Wallets:** The addresses you are trailing.
-*   **Sizing Mode:** Switching between `fixed`, `self_pct`, and `copy_pct` natively.
+*   **Sizing Mode:** Switching between `fixed`, `self_pct`, `target_usd`, and `target_scalar` natively.
 *   **Risk Parameters:** Hard caps like `max_slip_pct`, USD thresholds, and cooldowns.
 
 Pressing **Save** updates `config.toml` and instantly applies the changes to the live bot logic without restarting or interrupting active CLOB listeners.

@@ -15,6 +15,9 @@ pub enum SizingMode {
     /// Mirror the target's exact dollar notional (`event.size * event.price`),
     /// capped at `MAX_TRADE_SIZE_USD`.
     TargetUsd,
+    /// Scale the target's exact dollar notional by their wallet-specific scalar
+    /// (e.g. `0xABC:0.01` means multiply target notional by 0.01).
+    TargetScalar,
 }
 
 impl SizingMode {
@@ -23,6 +26,7 @@ impl SizingMode {
             Self::Fixed => "fixed",
             Self::SelfPct => "self_pct",
             Self::TargetUsd => "target_usd",
+            Self::TargetScalar => "target_scalar",
         }
     }
 
@@ -30,6 +34,7 @@ impl SizingMode {
         match s.trim().to_lowercase().as_str() {
             "self_pct" => Self::SelfPct,
             "target_usd" => Self::TargetUsd,
+            "target_scalar" => Self::TargetScalar,
             _ => Self::Fixed,
         }
     }

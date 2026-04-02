@@ -31,7 +31,8 @@ Clicking the Settings icon (Gear) opens the visual editor mapped explicitly to `
 Provides intuitive dropdowns for order calculation:
 *   `fixed`: Uses exactly X shares per trade regardless of current balance.
 *   `self_pct`: Calculates trade size based on a percentage of YOUR active total portfolio value.
-*   `copy_pct`: Calculates trade size based on a percentage of the TARGET's trade value.
+*   `target_usd`: Mirrors the exact dollar notional size of the target's trade.
+*   `target_scalar`: Calculates trade size based on a fractional percentage mapped to each respective target wallet.
 
 ### Risk Management parameters
 Easily enforce strict limits to prevent blowout scenarios:

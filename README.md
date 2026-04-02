@@ -98,12 +98,13 @@ The bot can also run **headless** (no TUI) as a systemd daemon on a Linux server
 
 - **Live balance tracking** - CLOB balance polled every 10 seconds.
 
-- **Three-mode proportional sizing** - choose how each trade is sized:
+- **Four-mode proportional sizing** - choose how each trade is sized:
 
   | Mode | Formula | When to use |
   |---|---|---|
   | `self_pct` (default) | `our_balance * COPY_SIZE_PCT` | Fixed % of our balance per trade — consistent and predictable |
   | `target_usd` | `target_size * target_price` | Mirror the target's exact dollar bet |
+  | `target_scalar` | `target_notional * wallet_scalar` | Scale target sizes fractionally per-wallet (e.g. 1% of a $500 bet = $5) |
   | `fixed` | Always `MAX_TRADE_SIZE_USD` | Simple deterministic size |
 
   All modes enforce a $5.00 CLOB minimum and `MAX_TRADE_SIZE_USD` ceiling.
@@ -231,7 +232,7 @@ On first run, if `config.toml` is missing the bot auto-generates it from default
 |-------------------|----------|-------------|
 | `PRIVATE_KEY`     | **Yes**  | Hex private key for the signing wallet (`0x...` or plain hex) |
 | `FUNDER_ADDRESS`  | **Yes**  | Proxy/Safe wallet address that holds USDC (shown on Polymarket profile) |
-| `TARGET_WALLETS`  | **Yes**  | Comma-separated list of target proxy wallet addresses to copy |
+| `TARGET_WALLETS`  | **Yes**  | List of wallet addresses you want to copy trades from (comma-separated). **Pro-Tip (Target Scalar):** You can append `:scalar` (like `0xabc...:0.01`) to proportionally fractional-scale a specific whale's orders using the `target_scalar` sizing mode! |
 
 ### `config.toml` — Tunables
 
@@ -248,14 +249,15 @@ On first run, if `config.toml` is missing the bot auto-generates it from default
 
 | Key | Default | Description |
 |---|---|---|
-| `mode` | `"self_pct"` | Sizing strategy: `"self_pct"`, `"target_usd"`, or `"fixed"` |
+| `mode` | `"self_pct"` | Sizing strategy: `"self_pct"`, `"target_usd"`, `"target_scalar"`, or `"fixed"` |
 | `copy_size_pct` | `0.15` | Fraction of our balance per trade when `mode = "self_pct"` (e.g. `0.15` = 15%) |
 
 | Mode | Formula | When to use |
 |---|---|---|
-| `self_pct` (default) | `balance × copy_size_pct` | Fixed % of your balance — scales naturally with account size |
-| `target_usd` | `target_size × target_price` | Mirror the target's exact dollar notional |
-| `fixed` | Always `max_trade_size_usd` | Simple deterministic size |
+| `self_pct` | `our_balance * COPY_SIZE_PCT` | Fixed % of our balance per trade |
+| `target_usd` | `target_size * target_price` | Mirror the target's exact dollar volume |
+| `target_scalar` | `target_notional * wallet_scalar` | Copy a fixed fraction of their bet size per target (setup in targets array) |
+| `fixed`      | `MAX_TRADE_SIZE_USD`         | Always spend exactly the ceiling |
 
 #### `[scanner]`
 

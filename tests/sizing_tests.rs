@@ -22,6 +22,7 @@ fn size(
         our_balance.into(),
         sizing_mode,
         copy_size_pct,
+        rust_decimal::Decimal::ONE,
         max_trade_usd.into(),
         target_notional.into(),
     )
@@ -169,6 +170,52 @@ fn target_usd_ignores_our_balance() {
     );
     assert_eq!(small, large);
     assert_eq!(small, dec!(30));
+}
+
+// -- SizingMode::TargetScalar -------------------------------------------------
+
+#[test]
+fn target_scalar_scales_target_notional() {
+    // Target bet $500. Scalar is 0.01 (1%). Expected: $5.00
+    let usd = compute_order_usd(
+        dec!(1000),
+        &SizingMode::TargetScalar,
+        None,
+        dec!(0.01),
+        dec!(50),
+        dec!(500),
+    );
+    assert_eq!(usd, dec!(5.00));
+}
+
+#[test]
+fn target_scalar_caps_at_max_trade_usd() {
+    // Target bet $10,000. Scalar is 0.01 (1%). Raw is $100.
+    // Cap is $50. Expected: $50.
+    let usd = compute_order_usd(
+        dec!(1000),
+        &SizingMode::TargetScalar,
+        None,
+        dec!(0.01),
+        dec!(50),
+        dec!(10000),
+    );
+    assert_eq!(usd, dec!(50));
+}
+
+#[test]
+fn target_scalar_below_clob_minimum_returns_zero() {
+    // Target bet $50. Scalar is 0.01. Raw is $0.50 (below $1 CLOB minimum).
+    // Expected: $0 (skip).
+    let usd = compute_order_usd(
+        dec!(1000),
+        &SizingMode::TargetScalar,
+        None,
+        dec!(0.01),
+        dec!(50),
+        dec!(50),
+    );
+    assert_eq!(usd, dec!(0));
 }
 
 // -- Floor/ceiling edge cases (mode-agnostic) ---------------------------------

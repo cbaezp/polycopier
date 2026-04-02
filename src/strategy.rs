@@ -66,6 +66,7 @@ pub fn compute_order_usd(
     our_balance: Decimal,
     sizing_mode: &SizingMode,
     copy_size_pct: Option<Decimal>,
+    wallet_scalar: Decimal,
     max_trade_usd: Decimal,
     target_notional: Decimal,
 ) -> Decimal {
@@ -77,6 +78,7 @@ pub fn compute_order_usd(
             our_balance * pct
         }
         SizingMode::TargetUsd => target_notional,
+        SizingMode::TargetScalar => target_notional * wallet_scalar,
     };
     let capped = desired.min(max_trade_usd);
     // Return ZERO to signal "skip" when below the CLOB minimum.
@@ -507,10 +509,16 @@ pub fn start_strategy_engine(
                     };
                     // target_notional = what the target just bet in dollar terms
                     let target_notional = event.size * event.price;
+                    let wallet_scalar = config
+                        .target_scalars
+                        .get(&event.maker_address)
+                        .cloned()
+                        .unwrap_or(Decimal::ONE);
                     let budget_usd = compute_order_usd(
                         current_balance,
                         &config.sizing_mode,
                         config.copy_size_pct,
+                        wallet_scalar,
                         config.max_trade_size_usd,
                         target_notional,
                     );
