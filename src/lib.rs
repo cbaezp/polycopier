@@ -1,4 +1,5 @@
 /// polycopier — library crate exposing all modules for integration testing and downstream use.
+pub mod api;
 pub mod backoff;
 pub mod clients;
 pub mod config;

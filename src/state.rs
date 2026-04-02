@@ -1,6 +1,6 @@
-use crate::models::{EvaluatedTrade, Position, TargetPosition};
+use crate::models::{EvaluatedTrade, Position, QueuedOrder, TargetPosition};
 use rust_decimal::Decimal;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 pub struct BotState {
@@ -31,7 +31,7 @@ pub struct BotState {
     /// strategy engine on submission and by the order watcher on cancellation.
     /// The scanner uses this alongside `positions` to prevent duplicate orders
     /// across bot restarts.
-    pub pending_order_tokens: HashSet<String>,
+    pub pending_orders: HashMap<String, QueuedOrder>,
     /// When the order watcher last completed a cycle.
     pub last_watcher_run_at: Option<Instant>,
 }
@@ -52,7 +52,7 @@ impl BotState {
             last_scan_at: None,
             next_scan_secs: 0,
             last_price_refresh_at: None,
-            pending_order_tokens: HashSet::new(),
+            pending_orders: HashMap::new(),
             last_watcher_run_at: None,
         }
     }

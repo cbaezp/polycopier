@@ -1,3 +1,4 @@
+pub mod api;
 pub mod backoff;
 pub mod clients;
 pub mod config;
@@ -23,9 +24,15 @@ use tracing_subscriber::prelude::*;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // ── Run mode ──────────────────────────────────────────────────────────────
-    // --headless   Skip the TUI; log to stdout. Intended for server / systemd.
+    // --daemon     Skip the TUI; log to stdout. Intended for server / PM2.
+    // --ui         Skip the TUI; log to stdout; start Web UI; open browser.
     // (default)    Interactive TUI mode for local use.
-    let headless = std::env::args().any(|a| a == "--headless");
+    let args: Vec<String> = std::env::args().collect();
+    let cli = crate::config::parse_cli_args(&args);
+    let is_daemon = cli.is_daemon;
+    let is_ui = cli.is_ui;
+    let skip_open = cli.skip_open;
+    let headless = cli.headless;
 
     // ── Tracing ───────────────────────────────────────────────────────────────
     // File log  : WARN+ always written to ./polycopier.log (full message, no truncation).
@@ -69,15 +76,44 @@ async fn main() -> anyhow::Result<()> {
         log_buffer
     };
 
-    if headless {
+    if is_daemon {
         tracing::info!(
-            "polycopier starting in HEADLESS mode (no TUI). \
-             Send SIGTERM or SIGINT (Ctrl-C) to stop."
+            "polycopier starting in DAEMON mode. Send SIGTERM or SIGINT (Ctrl-C) to stop."
         );
+    } else if is_ui {
+        tracing::info!(
+            "polycopier starting in Web UI mode. Dashboard available at http://localhost:3000"
+        );
+        if !skip_open {
+            let _ = std::process::Command::new("open")
+                .arg("http://localhost:3000")
+                .spawn();
+        }
     }
 
     // ── Boot sequence ─────────────────────────────────────────────────────────
-    let config = config::Config::load_or_prompt().await?;
+
+    // ── Boot sequence ─────────────────────────────────────────────────────────
+
+    // Load .env early to evaluate whether keys are actually missing or invalid
+    let _ = dotenvy::dotenv();
+    let private_key = std::env::var("PRIVATE_KEY").unwrap_or_default();
+    let needs_setup = private_key.trim_matches('"').trim_start_matches("0x").len() != 64
+        || !std::path::Path::new("config.toml").exists();
+
+    // If setup is needed and the user requested the Web UI setup mode,
+    // we launch a dedicated lightweight Setup API on port 3000 and suspend the backend.
+    // If they run the standard `cargo run`, it ignores this and uses the terminal natively.
+    if is_ui && needs_setup {
+        let setup_router = api::create_setup_router();
+        tokio::spawn(async move {
+            if let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:3000").await {
+                let _ = axum::serve(listener, setup_router).await;
+            }
+        });
+    }
+
+    let config = config::Config::load_or_prompt(is_ui).await?;
     let state = Arc::new(RwLock::new(state::BotState::new()));
     // Wrap RiskEngine in Arc<Mutex<>> so both strategy engine and order watcher
     // can reference it — order watcher calls record_loss() on loss-triggered cancels.
@@ -159,6 +195,28 @@ async fn main() -> anyhow::Result<()> {
     // Gap C + Gap E: now receives risk_engine Arc to call record_loss() on loss-triggered
     // cancellations, and uses exponential backoff on CLOB errors.
     order_watcher::start_order_watcher(config.clone(), clob, state.clone(), risk_engine);
+
+    // ── Local Web API Server ──────────────────────────────────────────────────
+    let api_router = api::create_router(state.clone(), copy_ledger.clone());
+    if is_ui {
+        tokio::spawn(async move {
+            match tokio::net::TcpListener::bind("127.0.0.1:3000").await {
+                Ok(listener) => {
+                    if let Err(e) = axum::serve(listener, api_router).await {
+                        tracing::error!("Local API Server crashed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "FATAL: Could not bind to Port 3000. Is another instance of Polycopier already running? Error: {}",
+                        e
+                    );
+                    std::process::exit(1);
+                }
+            }
+        });
+    }
 
     // ── Main thread: TUI or headless wait ─────────────────────────────────────
     if headless {

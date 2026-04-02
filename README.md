@@ -1,6 +1,10 @@
 # polycopier
 
-![Polycopier](poly_img.png)
+<p align="center">
+  <img src="poly_ui.png" alt="Polycopier Web UI" width="48%">
+  &nbsp;
+  <img src="poly_img.png" alt="Polycopier Terminal UI" width="48%">
+</p>
 
 A high-performance, terminal-based copy trading bot for Polymarket prediction markets,
 built in Rust against the official [`polymarket-client-sdk`](https://github.com/Polymarket/rs-clob-client).
@@ -58,7 +62,10 @@ The bot **never enters the same token from two different targets.** The first ta
 a token "owns" it in the ledger; all subsequent entries for that token from other targets
 are ignored until the position is fully closed.
 
-The entire interface is a terminal UI (TUI) with no browser required.
+The bot provides two powerful interfaces:
+1. **Web Dashboard** - A sleek, modern React frontend hosted natively at `http://localhost:3000` for live monitoring, position tracking (including exact source wallets), and interactive hot-swappable configuration.
+2. **Terminal UI (TUI)** - A lightweight, six-panel `ratatui` interface directly in your console.
+
 The bot can also run **headless** (no TUI) as a systemd daemon on a Linux server.
 
 ---
@@ -111,6 +118,11 @@ The bot can also run **headless** (no TUI) as a systemd daemon on a Linux server
     - `MAX_COPY_LOSS_PCT` — skip if target is already this far underwater
     - `MAX_COPY_GAIN_PCT` — skip if target is already this far in profit (chasing adds slippage)
     - **Expiry guard** — skip if `redeemable=true` (market resolved on-chain) or `end_date` is strictly in the past (`< today`). Same-day markets are **not** blocked — `redeemable` is the authoritative settlement signal; `end_date < today` is only a backstop for stale API data
+
+- **Web Dashboard** - a pristine glassmorphism React application hosted at `http://localhost:3000`:
+  - Account overview (total balance, PnL, target tracker)
+  - Beautiful **Copied & Open** positions table featuring exactly which **Source Wallet** initiated the trace.
+  - Interactive **Config Settings Panel** with intuitive range sliders, dynamic system toggles, and one-click Seamless Hot Rebooting.
 
 - **Terminal UI** - six-panel ratatui interface:
   - Account dashboard (balance, PnL, **API-sourced Copied counter**)
@@ -285,19 +297,37 @@ Edit `src/clients.rs` and change `SignatureType::Proxy` to match your setup.
 
 ## Usage
 
+### Running Locally
+
+> [!NOTE]
+> For a comprehensive breakdown of every feature, refer to the detailed [Web UI Documentation](docs/WEB_UI.md) or the [Terminal UI & Daemon Documentation](docs/TUI.md).
+
+You can launch the bot in three distinct modes depending on how you prefer to configure and monitor it:
+
+**1. Standard Terminal Mode (Local Console)**
 ```bash
 cargo run --release
 ```
+1. **The Terminal UI:** Rendered directly in your active console window where you ran the command. (The Web Dashboard is deliberately disabled to reduce background footprint).
 
-On first run with an empty or placeholder `.env`, the setup wizard prompts for:
+**2. Web UI-Only Mode (Recommended for new users)**
+```bash
+cargo run --release -- --ui
+```
+This skips the terminal interface entirely. It natively launches the Web Dashboard and automatically opens `http://localhost:3000` in your browser.
+If you run this without an `.env` file, it will seamlessly suspend the bot and present a **Web Setup Wizard** where you can securely input your credentials. Once submitted, the bot will hot-reboot itself flawlessly.
 
-1. Private key (hidden input)
-2. Funder address
-3. Target wallet addresses
+**3. Headless Daemon Mode (For Servers & PM2)**
+```bash
+cargo run --release -- --daemon
+```
+Runs the bot entirely in the background, logging strictly to stdout. The terminal interface and the Web Dashboard are both discarded, ensuring a completely headless and silent 24/7 worker.
 
-After saving `.env`, `config.toml` is auto-generated (or migrated from any legacy `.env` values).
-Press **`[s]`** inside the TUI at any time to open the in-TUI settings editor where all 15 tunables
-are editable with arrow keys and are saved to `config.toml` on `[s]`.
+After saving your initial `.env` file via either the terminal or the Web Wizard, `config.toml` is auto-generated using safe defaults.
+
+**Modifying Settings:**
+- **From the Web Dashboard:** Click the "Settings" tab in the browser to visually adjust all 15 operational tunables in real-time.
+- **From the TUI:** Press **`[s]`** inside the terminal to open the native settings editor where values are editable with arrow keys and saved to `config.toml` on `[s]`.
 
 ### Logging
 
@@ -329,8 +359,9 @@ the ratatui TUI.
 
 | Command | Mode | When to use |
 |---|---|---|
-| `polycopier` | Interactive TUI | Local monitoring, settings editing |
-| `polycopier --headless` | Headless daemon | Cloud server, 24/7 unattended |
+| `polycopier` | Pure Terminal UI | Local monitoring on your machine (Lowest memory footprint) |
+| `polycopier --ui` | Web UI + Headless | Local browser interface on `:3000` |
+| `polycopier --headless` | Pure Headless Worker | Cloud deployment (24/7 logging, TUI discarded, no open ports) |
 
 ### Prerequisites
 
