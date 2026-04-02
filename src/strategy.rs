@@ -542,7 +542,7 @@ pub fn start_strategy_engine(
                             // Check whether we already have a pending GTC order for this token.
                             let already_pending = {
                                 let guard = state.read().await;
-                                guard.pending_order_tokens.contains(&event.token_id)
+                                guard.pending_orders.contains_key(&event.token_id)
                             };
                             if already_pending {
                                 warn!(
@@ -567,7 +567,15 @@ pub fn start_strategy_engine(
                     // events for the same token are blocked immediately.
                     {
                         let mut guard = state.write().await;
-                        guard.pending_order_tokens.insert(order.token_id.clone());
+                        guard.pending_orders.insert(
+                            order.token_id.clone(),
+                            crate::models::QueuedOrder {
+                                token_id: order.token_id.clone(),
+                                price: order.price,
+                                size: order.size,
+                                side: order.side,
+                            },
+                        );
                     }
 
                     let submitter_clone = submitter.clone();
@@ -627,7 +635,7 @@ pub fn start_strategy_engine(
                             Err(e) => {
                                 // Remove from pending on failure so the order can be retried.
                                 let mut guard = state_clone.write().await;
-                                guard.pending_order_tokens.remove(&token_id_clone);
+                                guard.pending_orders.remove(&token_id_clone);
                                 tracing::error!("Execution failed: {}", e);
                             }
                         }

@@ -176,7 +176,7 @@ async fn run_once(
             } else {
                 // Unblock the scanner so the market can be re-entered if needed
                 let mut guard = state.write().await;
-                guard.pending_order_tokens.remove(tid);
+                guard.pending_orders.remove(tid);
                 drop(guard);
 
                 // Gap C: notify risk engine when a loss-triggered cancel fires.

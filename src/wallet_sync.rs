@@ -75,17 +75,32 @@ pub async fn seed_pending_orders(clob: &AuthedClobClient, state: State) {
     let req = OrdersRequest::default();
     match clob.orders(&req, None).await {
         Ok(page) => {
-            let live: Vec<String> = page
+            let live = page
                 .data
                 .into_iter()
                 .filter(|o| format!("{:?}", o.status).to_uppercase().contains("LIVE"))
-                .map(|o| o.asset_id.to_string())
-                .collect();
+                .collect::<Vec<_>>();
             let count = live.len();
             if count > 0 {
+                use crate::models::{QueuedOrder, TradeSide};
                 let mut guard = state.write().await;
-                for token_id in live {
-                    guard.pending_order_tokens.insert(token_id);
+                for o in live {
+                    let size = o.original_size;
+                    let price = o.price;
+                    let side = if format!("{:?}", o.side).to_uppercase().contains("BUY") {
+                        TradeSide::BUY
+                    } else {
+                        TradeSide::SELL
+                    };
+                    guard.pending_orders.insert(
+                        o.asset_id.to_string(),
+                        QueuedOrder {
+                            token_id: o.asset_id.to_string(),
+                            price,
+                            size,
+                            side,
+                        },
+                    );
                 }
                 tracing::warn!(
                     "Seeded {} live GTC order(s) — scanner will treat these as already queued.",

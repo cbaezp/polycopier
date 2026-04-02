@@ -8,7 +8,7 @@ use axum::{
 };
 use rust_decimal::Decimal;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -29,7 +29,7 @@ pub struct StateResponse {
     pub trades_skipped: u32,
     pub copied_count: usize,
     pub next_scan_secs: u64,
-    pub pending_order_tokens: HashSet<String>,
+    pub pending_orders: std::collections::HashMap<String, crate::models::QueuedOrder>,
 }
 
 async fn get_state(State(api_state): State<ApiState>) -> Json<StateResponse> {
@@ -47,7 +47,7 @@ async fn get_state(State(api_state): State<ApiState>) -> Json<StateResponse> {
         trades_skipped: guard.trades_skipped,
         copied_count: guard.copied_count,
         next_scan_secs: guard.next_scan_secs,
-        pending_order_tokens: guard.pending_order_tokens.clone(),
+        pending_orders: guard.pending_orders.clone(),
     };
 
     Json(response)

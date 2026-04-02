@@ -75,6 +75,14 @@ pub struct OrderRequest {
     pub side: TradeSide,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueuedOrder {
+    pub token_id: String,
+    pub price: Decimal,
+    pub size: Decimal,
+    pub side: TradeSide,
+}
+
 // -- Opportunity Scanner types -------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

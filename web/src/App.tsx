@@ -135,35 +135,37 @@ function App() {
             <div className="glass-panel">
               <div className="panel-header">
                 Pending Orders
-                <span className="panel-subtitle">Queued: {(state.pending_order_tokens || []).length}</span>
+                <span className="panel-subtitle">Queued: {Object.keys(state.pending_orders || {}).length}</span>
               </div>
               <div className="table-container">
                 <table>
                   <thead>
                     <tr>
                       <th>Market</th>
+                      <th>Size</th>
+                      <th>Our Limit</th>
                       <th>Target Avg</th>
-                      <th>Cur Price</th>
                       <th>Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(state.pending_order_tokens || []).map((tokenId: string, i: number) => {
+                    {Object.values(state.pending_orders || {}).map((order: any, i: number) => {
+                      const tokenId = order.token_id;
                       const t = targets.find((x: any) => x.token_id === tokenId);
                       const title = t ? t.title : `${tokenId.substring(0, 15)}...`;
                       const targetAvg = t ? parseFloat(t.avg_price) : 0;
-                      const curPrice = t ? parseFloat(t.cur_price) : 0;
                       return (
                         <tr key={i}>
                           <td className="td-truncate" title={title}>{title}</td>
+                          <td><span className={`side-${order.side}`}>{order.side}</span> {parseFloat(order.size).toFixed(2)}</td>
+                          <td>${parseFloat(order.price).toFixed(3)}</td>
                           <td>{targetAvg > 0 ? `$${targetAvg.toFixed(3)}` : '-'}</td>
-                          <td>{curPrice > 0 ? `$${curPrice.toFixed(3)}` : '-'}</td>
                           <td><span className="status status-QUEUED">QUEUED</span></td>
                         </tr>
                       );
                     })}
-                    {(state.pending_order_tokens || []).length === 0 && (
-                      <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No queued orders</td></tr>
+                    {Object.keys(state.pending_orders || {}).length === 0 && (
+                      <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No queued orders</td></tr>
                     )}
                   </tbody>
                 </table>
