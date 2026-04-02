@@ -97,7 +97,9 @@ function App() {
                     <tr>
                       <th>Market</th>
                       <th>Size</th>
-                      <th>Avg Price</th>
+                      <th>Our Avg</th>
+                      <th>Target Avg</th>
+                      <th>Diff %</th>
                       <th>Status</th>
                     </tr>
                   </thead>
@@ -105,17 +107,24 @@ function App() {
                     {Object.values(state.positions || {}).map((p: any, i: number) => {
                       const t = targets.find((x: any) => x.token_id === p.token_id);
                       const title = t ? t.title : `${p.token_id.substring(0, 15)}...`;
+                      const ourAvg = parseFloat(p.average_entry_price);
+                      const targetAvg = t ? parseFloat(t.avg_price) : 0;
+                      const diffPct = targetAvg > 0 ? ((ourAvg - targetAvg) / targetAvg) * 100 : 0;
                       return (
                         <tr key={i}>
                           <td className="td-truncate" title={title}>{title}</td>
                           <td>{parseFloat(p.size).toFixed(2)}</td>
-                          <td>${parseFloat(p.average_entry_price).toFixed(3)}</td>
+                          <td>${ourAvg.toFixed(3)}</td>
+                          <td>{targetAvg > 0 ? `$${targetAvg.toFixed(3)}` : '-'}</td>
+                          <td className={targetAvg > 0 ? (diffPct > 0 ? 'val-negative' : 'val-positive') : ''}>
+                            {targetAvg > 0 ? `${diffPct > 0 ? '+' : ''}${diffPct.toFixed(1)}%` : '-'}
+                          </td>
                           <td><span className="status status-HELD">HELD</span></td>
                         </tr>
                       );
                     })}
                     {Object.keys(state.positions || {}).length === 0 && (
-                      <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No open positions</td></tr>
+                      <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No open positions</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -133,6 +142,8 @@ function App() {
                   <thead>
                     <tr>
                       <th>Market</th>
+                      <th>Target Avg</th>
+                      <th>Cur Price</th>
                       <th>Status</th>
                     </tr>
                   </thead>
@@ -140,15 +151,19 @@ function App() {
                     {(state.pending_order_tokens || []).map((tokenId: string, i: number) => {
                       const t = targets.find((x: any) => x.token_id === tokenId);
                       const title = t ? t.title : `${tokenId.substring(0, 15)}...`;
+                      const targetAvg = t ? parseFloat(t.avg_price) : 0;
+                      const curPrice = t ? parseFloat(t.cur_price) : 0;
                       return (
                         <tr key={i}>
                           <td className="td-truncate" title={title}>{title}</td>
+                          <td>{targetAvg > 0 ? `$${targetAvg.toFixed(3)}` : '-'}</td>
+                          <td>{curPrice > 0 ? `$${curPrice.toFixed(3)}` : '-'}</td>
                           <td><span className="status status-QUEUED">QUEUED</span></td>
                         </tr>
                       );
                     })}
                     {(state.pending_order_tokens || []).length === 0 && (
-                      <tr><td colSpan={2} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No queued orders</td></tr>
+                      <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No queued orders</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -167,7 +182,8 @@ function App() {
                     <tr>
                       <th>Market</th>
                       <th>Side</th>
-                      <th>Price</th>
+                      <th>Target Avg</th>
+                      <th>Cur Price</th>
                       <th>PnL</th>
                       <th>Status</th>
                     </tr>
@@ -180,6 +196,7 @@ function App() {
                         <tr key={i}>
                           <td className="td-truncate" title={t.title}>{t.title}</td>
                           <td>{t.outcome}</td>
+                          <td>${parseFloat(t.avg_price).toFixed(3)}</td>
                           <td>${parseFloat(t.cur_price).toFixed(3)}</td>
                           <td className={pnl < 0 ? 'val-negative' : pnl > 0 ? 'val-positive' : ''}>
                             {pnl > 0 ? '+' : ''}{pnl.toFixed(1)}%
