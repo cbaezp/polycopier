@@ -271,14 +271,23 @@ export default function SettingsManager() {
             <div className="panel-header">Risk Guards</div>
             <div className="form-group">
               <label>Slippage Aggression</label>
-              <input
-                type="text"
-                value={config.execution.max_slippage_pct}
-                onChange={(e) =>
-                  setConfig({ ...config, execution: { ...config.execution, max_slippage_pct: e.target.value } })
-                }
-              />
-              <span className="field-hint">Price buffer to guarantee limit executions. (e.g. 0.02 = 2%)</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <input
+                  type="range"
+                  min="0" max="0.10" step="0.001"
+                  value={parseFloat(config.execution.max_slippage_pct) || 0}
+                  onChange={(e) =>
+                    setConfig({ ...config, execution: { ...config.execution, max_slippage_pct: e.target.value } })
+                  }
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: '1.2rem', fontWeight: 600, minWidth: '60px', color: 'var(--accent-warning)' }}>
+                  {((parseFloat(config.execution.max_slippage_pct) || 0) * 100).toFixed(1)}%
+                </span>
+              </div>
+              <span className="field-hint" style={{ display: 'block', marginTop: '0.25rem' }}>
+                Price buffer strictly added to target's entry price to guarantee prompt execution if the orderbook is violently shifting.
+              </span>
             </div>
 
             <div className="form-group" style={{ marginTop: '1rem' }}>
