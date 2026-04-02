@@ -290,17 +290,41 @@ export default function SettingsManager() {
               </span>
             </div>
 
-            <div className="form-group" style={{ marginTop: '1rem' }}>
-              <label>Systemic Cooldown Triggers: Max Consecutive Losses</label>
-              <input
-                type="number"
-                value={config.risk.max_consecutive_losses}
-                onChange={(e) =>
-                  setConfig({ ...config, risk: { ...config.risk, max_consecutive_losses: parseInt(e.target.value) } })
-                }
-              />
-              <span className="field-hint">0 disables this kill-switch completely.</span>
+            <div className="form-group" style={{ marginTop: '1.5rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={config.risk.max_consecutive_losses > 0}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setConfig({ ...config, risk: { ...config.risk, max_consecutive_losses: enabled ? 3 : 0 } });
+                  }}
+                  style={{ width: 'auto', margin: 0 }}
+                />
+                <span>Enable Systemic Cooldown Guard</span>
+              </label>
+              <span className="field-hint" style={{ display: 'block', marginTop: '0.25rem' }}>
+                Automatically suspends copying entirely if the target proxy wallet starts bleeding heavily.
+              </span>
             </div>
+
+            {hasLossGuard && (
+              <div className="form-group dynamic-field" style={{ animation: 'fadeIn 0.3s', paddingLeft: '1.5rem', borderLeft: '2px solid rgba(255,255,255,0.1)' }}>
+                <label>Consecutive Realized Losses Limit</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input
+                    type="number"
+                    min="1"
+                    style={{ width: '100px' }}
+                    value={config.risk.max_consecutive_losses}
+                    onChange={(e) =>
+                      setConfig({ ...config, risk: { ...config.risk, max_consecutive_losses: Math.max(1, parseInt(e.target.value) || 1) } })
+                    }
+                  />
+                  <span className="field-hint">losses</span>
+                </div>
+              </div>
+            )}
 
             {hasLossGuard && (
               <div className="form-group dynamic-field" style={{ animation: 'fadeIn 0.3s' }}>
