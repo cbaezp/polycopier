@@ -173,6 +173,17 @@ export default function SettingsManager() {
               <span className="field-hint">Skips Catch-Up scanning if target's position is deeply underwater.</span>
             </div>
             <div className="form-group" style={{ marginTop: '1rem' }}>
+              <label>Max Copy Gain Pct (e.g. 0.05 = 5%)</label>
+              <input
+                type="text"
+                value={config.scanner.max_copy_gain_pct}
+                onChange={(e) =>
+                  setConfig({ ...config, scanner: { ...config.scanner, max_copy_gain_pct: e.target.value } })
+                }
+              />
+              <span className="field-hint">Skips Catch-Up scanning if target is already too far in profit to chase.</span>
+            </div>
+            <div className="form-group" style={{ marginTop: '1rem' }}>
               <label>Entry Price Dust Filter</label>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 <input
