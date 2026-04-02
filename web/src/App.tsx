@@ -100,6 +100,7 @@ function App() {
                       <th>Our Avg</th>
                       <th>Target Avg</th>
                       <th>Diff %</th>
+                      <th>Live PnL</th>
                       <th>Status</th>
                     </tr>
                   </thead>
@@ -109,7 +110,11 @@ function App() {
                       const title = t ? t.title : `${p.token_id.substring(0, 15)}...`;
                       const ourAvg = parseFloat(p.average_entry_price);
                       const targetAvg = t ? parseFloat(t.avg_price) : 0;
+                      const curPrice = t ? parseFloat(t.cur_price) : ourAvg;
                       const diffPct = targetAvg > 0 ? ((ourAvg - targetAvg) / targetAvg) * 100 : 0;
+                      const pnlUsd = (curPrice - ourAvg) * parseFloat(p.size);
+                      const pnlPct = ourAvg > 0 ? ((curPrice - ourAvg) / ourAvg) * 100 : 0;
+                      
                       return (
                         <tr key={i}>
                           <td className="td-truncate" title={title}>{title}</td>
@@ -119,12 +124,15 @@ function App() {
                           <td className={targetAvg > 0 ? (diffPct > 0 ? 'val-negative' : 'val-positive') : ''}>
                             {targetAvg > 0 ? `${diffPct > 0 ? '+' : ''}${diffPct.toFixed(1)}%` : '-'}
                           </td>
+                          <td className={pnlUsd !== 0 ? (pnlUsd > 0 ? 'val-positive' : 'val-negative') : ''}>
+                            {pnlUsd > 0 ? '+' : ''}${pnlUsd.toFixed(2)} ({pnlPct > 0 ? '+' : ''}{pnlPct.toFixed(1)}%)
+                          </td>
                           <td><span className="status status-HELD">HELD</span></td>
                         </tr>
                       );
                     })}
                     {Object.keys(state.positions || {}).length === 0 && (
-                      <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No open positions</td></tr>
+                      <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No open positions</td></tr>
                     )}
                   </tbody>
                 </table>
