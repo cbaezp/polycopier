@@ -58,12 +58,7 @@ export default function SettingsManager() {
     setIsSaving(false);
   };
 
-  const handleRestart = async () => {
-    if (confirm("The bot will self-terminate. You must restart it manually via cargo run if not using a daemon. Proceed?")) {
-      await fetch("/api/action/restart", { method: "POST" });
-      setMessage("Bot stopped.");
-    }
-  };
+
 
   if (!config || !envData) return <div className="loading-container"><div className="spinner"></div><div>Loading Control Center...</div></div>;
 
@@ -289,7 +284,6 @@ export default function SettingsManager() {
       </div>
 
       <div className="settings-actions" style={{ position: 'sticky', bottom: '-1px', background: 'var(--bg-secondary)', padding: '1rem', borderTop: '1px solid var(--border)', zIndex: 10 }}>
-        <button className="btn btn-danger" onClick={handleRestart} style={{ marginRight: 'auto' }}>Force Restart Daemon</button>
         {message && <span className="message">{message}</span>}
         <button className="btn btn-primary" onClick={handleSave} disabled={isSaving}>
           {isSaving ? "Writing configs..." : "Save Configuration System"}
