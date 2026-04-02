@@ -58,15 +58,29 @@ impl BotState {
     }
 
     pub fn push_evaluated_trade(&mut self, trade: EvaluatedTrade) {
-        if trade.validated {
-            self.copies_executed += 1;
-        } else {
-            self.trades_skipped += 1;
+        // Anti-Spam: The bot evaluates target positions aggressively every ~5 seconds.
+        // If a trade is skipped (e.g., insufficient balance, limits), we do NOT want
+        // to infinitely increment the skips counter or flood the UI feed with IDENTICAL
+        // rejection events every single cycle.
+        let is_duplicate = self.live_feed.iter().any(|existing| {
+            existing.validated == trade.validated
+                && existing.original_event.token_id == trade.original_event.token_id
+                && existing.original_event.side == trade.original_event.side
+                && existing.reason == trade.reason
+        });
+
+        if !is_duplicate {
+            if trade.validated {
+                self.copies_executed += 1;
+            } else {
+                self.trades_skipped += 1;
+            }
+
+            if self.live_feed.len() == 100 {
+                self.live_feed.pop_back();
+            }
+            self.live_feed.push_front(trade);
         }
-        if self.live_feed.len() == 100 {
-            self.live_feed.pop_back();
-        }
-        self.live_feed.push_front(trade);
     }
 }
 

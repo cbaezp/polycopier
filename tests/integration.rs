@@ -239,8 +239,10 @@ mod state_tests {
     #[test]
     fn feed_capped_at_100_entries() {
         let mut state = BotState::new();
-        for _ in 0..110 {
-            state.push_evaluated_trade(make_eval(true));
+        for i in 0..110 {
+            let mut eval = make_eval(true);
+            eval.original_event.token_id = format!("t{}", i);
+            state.push_evaluated_trade(eval);
         }
         assert_eq!(state.live_feed.len(), 100);
     }
@@ -248,11 +250,15 @@ mod state_tests {
     #[test]
     fn counters_accumulate_correctly() {
         let mut state = BotState::new();
-        for _ in 0..5 {
-            state.push_evaluated_trade(make_eval(true));
+        for i in 0..5 {
+            let mut eval = make_eval(true);
+            eval.original_event.token_id = format!("t{}", i);
+            state.push_evaluated_trade(eval);
         }
-        for _ in 0..3 {
-            state.push_evaluated_trade(make_eval(false));
+        for i in 5..8 {
+            let mut eval = make_eval(false);
+            eval.original_event.token_id = format!("t{}", i);
+            state.push_evaluated_trade(eval);
         }
         assert_eq!(state.copies_executed, 5);
         assert_eq!(state.trades_skipped, 3);
