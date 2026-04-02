@@ -104,10 +104,27 @@ pub fn start_position_scanner(
 
         loop {
             // Compute next sleep based on how enterable the target's open positions still are.
-            let interval_secs = {
+            let adaptive_interval = {
                 let guard = state.read().await;
                 compute_scan_interval(&guard.target_positions, config.max_copy_loss_pct)
             };
+
+            // Chronological Alignment: High-Frequency Minute Burst.
+            // Rapidly poll every 1 second during the minute crossover (:58 to :03) to snipe new time-based positions.
+            let now = chrono::Utc::now();
+            use chrono::Timelike;
+            let current_sec = now.second();
+
+            let secs_until_burst = if !(4..58).contains(&current_sec) {
+                // We are inside the aggressive strike window. Sleep for exactly 1 second.
+                1
+            } else {
+                // Outside the window. Sleep normally, but guarantee we wake up EXACTLY at :58.
+                (58 - current_sec) as u64
+            };
+
+            // Intercept: use shortest interval between adaptive needs and chronological alignment.
+            let interval_secs = adaptive_interval.min(secs_until_burst);
 
             // Apply backoff on top of normal interval if API is misbehaving.
             let sleep_secs = if consecutive_errors > 0 {

@@ -522,11 +522,9 @@ pub fn start_strategy_engine(
                         config.max_trade_size_usd,
                         target_notional,
                     );
-                    let raw_size = if target_notional > budget_usd {
-                        budget_usd / event.price
-                    } else {
-                        event.size
-                    };
+                    // Budget exactly reflects the sizing engine's mathematical intent.
+                    // (TargetUSD mirrors natively, Scalars scale natively, Fixed/SelfPct override natively)
+                    let raw_size = budget_usd / event.price;
                     let buy_size = raw_size.round_dp(2); // CLOB requires 2dp lot size
 
                     // CLOB hard minimum: 5 shares. Orders below this always 400.
