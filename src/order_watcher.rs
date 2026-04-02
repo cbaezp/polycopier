@@ -73,9 +73,6 @@ async fn run_once(
     // 1. Fetch our open live orders
     let req = OrdersRequest::default();
     let orders_page = clob.orders(&req, None).await?;
-    if orders_page.data.is_empty() {
-        return Ok(()); // Nothing to monitor
-    }
 
     // Prepare a set of tokens we actually care about, filtering for Live orders
     let mut open_tokens = std::collections::HashSet::new();
@@ -85,6 +82,27 @@ async fn run_once(
         if status_str.contains("LIVE") {
             open_tokens.insert(o.asset_id.to_string());
             live_orders.push(o);
+        }
+    }
+
+    // --- GHOST PURGE ---
+    // If an order is in our local `pending_orders` queue but DOES NOT appear
+    // in Polymarket's `live_orders` (e.g. silently rejected, expired, or filled
+    // without WS ping), we must purge it.
+    {
+        let mut guard = state.write().await;
+        let mut ghosts = Vec::new();
+        for tid in guard.pending_orders.keys() {
+            if !open_tokens.contains(tid) {
+                ghosts.push(tid.clone());
+            }
+        }
+        for ghost in ghosts {
+            tracing::info!(
+                "Purging ghost order for token {}: no longer LIVE on Polymarket network.",
+                ghost
+            );
+            guard.pending_orders.remove(&ghost);
         }
     }
 
