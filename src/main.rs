@@ -24,9 +24,13 @@ use tracing_subscriber::prelude::*;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // ── Run mode ──────────────────────────────────────────────────────────────
-    // --headless   Skip the TUI; log to stdout. Intended for server / systemd.
+    // --daemon     Skip the TUI; log to stdout. Intended for server / PM2.
+    // --ui         Skip the TUI; log to stdout; start Web UI; open browser.
     // (default)    Interactive TUI mode for local use.
-    let headless = std::env::args().any(|a| a == "--headless");
+    let args: Vec<String> = std::env::args().collect();
+    let is_daemon = args.iter().any(|a| a == "--daemon" || a == "--headless");
+    let is_ui = args.iter().any(|a| a == "--ui");
+    let headless = is_daemon || is_ui;
 
     // ── Tracing ───────────────────────────────────────────────────────────────
     // File log  : WARN+ always written to ./polycopier.log (full message, no truncation).
@@ -70,11 +74,17 @@ async fn main() -> anyhow::Result<()> {
         log_buffer
     };
 
-    if headless {
+    if is_daemon {
         tracing::info!(
-            "polycopier starting in HEADLESS mode (no TUI). \
-             Send SIGTERM or SIGINT (Ctrl-C) to stop."
+            "polycopier starting in DAEMON mode. Send SIGTERM or SIGINT (Ctrl-C) to stop."
         );
+    } else if is_ui {
+        tracing::info!(
+            "polycopier starting in Web UI mode. Dashboard available at http://localhost:3000"
+        );
+        let _ = std::process::Command::new("open")
+            .arg("http://localhost:3000")
+            .spawn();
     }
 
     // ── Boot sequence ─────────────────────────────────────────────────────────

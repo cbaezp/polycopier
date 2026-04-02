@@ -106,6 +106,7 @@ async fn restart() -> Json<serde_json::Value> {
 
 pub fn create_router(bot_state: Arc<RwLock<BotState>>) -> Router {
     use tower_http::cors::{Any, CorsLayer};
+    use tower_http::services::{ServeDir, ServeFile};
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -114,6 +115,9 @@ pub fn create_router(bot_state: Arc<RwLock<BotState>>) -> Router {
 
     let state = ApiState { bot_state };
 
+    // Serve static files from the build artifacts
+    let serve_dir = ServeDir::new("web/dist").fallback(ServeFile::new("web/dist/index.html"));
+
     Router::new()
         .route("/api/state", get(get_state))
         .route("/api/config", get(get_config).post(post_config))
@@ -121,4 +125,5 @@ pub fn create_router(bot_state: Arc<RwLock<BotState>>) -> Router {
         .route("/api/action/restart", post(restart))
         .with_state(state)
         .layer(cors)
+        .fallback_service(serve_dir)
 }
