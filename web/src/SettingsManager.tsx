@@ -162,26 +162,45 @@ export default function SettingsManager() {
               <span className="field-hint">How many concurrent Catch-up buys the scanner drops onto the CLOB simultaneously.</span>
             </div>
             <div className="form-group" style={{ marginTop: '1rem' }}>
-              <label>Max Copy Loss Pct (e.g. 0.40 = 40%)</label>
-              <input
-                type="text"
-                value={config.scanner.max_copy_loss_pct}
-                onChange={(e) =>
-                  setConfig({ ...config, scanner: { ...config.scanner, max_copy_loss_pct: e.target.value } })
-                }
-              />
-              <span className="field-hint">Skips Catch-Up scanning if target's position is deeply underwater.</span>
+              <label>Catch-up Loss Tolerance (Downside Threshold)</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <input
+                  type="range"
+                  min="0" max="1.0" step="0.01"
+                  value={parseFloat(config.scanner.max_copy_loss_pct) || 0}
+                  onChange={(e) =>
+                    setConfig({ ...config, scanner: { ...config.scanner, max_copy_loss_pct: e.target.value } })
+                  }
+                  style={{ flex: 1 }}
+                />
+                <span className="val-negative" style={{ fontSize: '1.2rem', fontWeight: 600, minWidth: '60px' }}>
+                  -{((parseFloat(config.scanner.max_copy_loss_pct) || 0) * 100).toFixed(0)}%
+                </span>
+              </div>
+              <span className="field-hint" style={{ display: 'block', marginTop: '0.25rem' }}>
+                If you just turned on the bot and the proxy wallet holds a token that is <strong>deep in the red</strong> (past this percentage), the system will intelligently <em>skip</em> copying it to protect you from catching a falling knife.
+              </span>
             </div>
-            <div className="form-group" style={{ marginTop: '1rem' }}>
-              <label>Max Copy Gain Pct (e.g. 0.05 = 5%)</label>
-              <input
-                type="text"
-                value={config.scanner.max_copy_gain_pct}
-                onChange={(e) =>
-                  setConfig({ ...config, scanner: { ...config.scanner, max_copy_gain_pct: e.target.value } })
-                }
-              />
-              <span className="field-hint">Skips Catch-Up scanning if target is already too far in profit to chase.</span>
+
+            <div className="form-group" style={{ marginTop: '1.5rem' }}>
+              <label>Catch-up FOMO Guard (Upside Threshold)</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <input
+                  type="range"
+                  min="0" max="1.0" step="0.01"
+                  value={parseFloat(config.scanner.max_copy_gain_pct) || 0}
+                  onChange={(e) =>
+                    setConfig({ ...config, scanner: { ...config.scanner, max_copy_gain_pct: e.target.value } })
+                  }
+                  style={{ flex: 1 }}
+                />
+                <span className="val-positive" style={{ fontSize: '1.2rem', fontWeight: 600, minWidth: '60px' }}>
+                  +{((parseFloat(config.scanner.max_copy_gain_pct) || 0) * 100).toFixed(0)}%
+                </span>
+              </div>
+              <span className="field-hint" style={{ display: 'block', marginTop: '0.25rem' }}>
+                If the proxy wallet holds a token that has already <strong>pumped heavily</strong> (past this percentage), the system will <em>skip</em> copying it to prevent you from buying at the absolute top of a missed rally.
+              </span>
             </div>
             <div className="form-group" style={{ marginTop: '1rem' }}>
               <label>Entry Price Dust Filter</label>
