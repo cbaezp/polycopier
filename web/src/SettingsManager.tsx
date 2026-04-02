@@ -45,12 +45,8 @@ export default function SettingsManager() {
         body: JSON.stringify(envData),
       });
 
-      if (confirm("Settings successfully flushed to disk! The backend needs to reboot to initialize these parameters.\n\nRestart Daemon now? (Note: If not running under PM2/SystemD, this terminal will close and you must 'cargo run' manually.)")) {
-        await fetch("/api/action/restart", { method: "POST" });
-        setMessage("Daemon restart signal sent.");
-      } else {
-        setMessage("Saved successfully! Restart later to apply.");
-      }
+      alert("Settings successfully flushed to disk!\n\nIMPORTANT: Since you are running the bot manually locally, please go to your terminal, press Ctrl+C to stop it, and run `cargo run` again to apply the new settings.");
+      setMessage("Saved successfully! Restart locally to apply.");
     } catch (e) {
       setMessage("Failed to save.");
     }
