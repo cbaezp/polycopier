@@ -98,8 +98,24 @@ async fn post_env(Json(payload): Json<EnvData>) -> Json<serde_json::Value> {
 async fn restart() -> Json<serde_json::Value> {
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        // In typical deployments, systemd/docker restarts the process on exit.
-        std::process::exit(0);
+
+        // Execute seamless process replacement (hot reboot in the same terminal)
+        let exe = std::env::current_exe().unwrap_or_else(|_| "cargo".into());
+        let args: Vec<String> = std::env::args().collect();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            tracing::warn!("Executing seamless API reboot...");
+            let err = std::process::Command::new(&exe).args(&args[1..]).exec();
+            tracing::error!("Seamless API reboot failed: {}", err);
+            std::process::exit(1);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = std::process::Command::new(&exe).args(&args[1..]).spawn();
+            std::process::exit(0);
+        }
     });
     Json(serde_json::json!({ "success": true }))
 }

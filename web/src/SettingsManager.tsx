@@ -45,8 +45,12 @@ export default function SettingsManager() {
         body: JSON.stringify(envData),
       });
 
-      alert("Settings successfully flushed to disk!\n\nIMPORTANT: Since you are running the bot manually locally, please go to your terminal, press Ctrl+C to stop it, and run `cargo run` again to apply the new settings.");
-      setMessage("Saved successfully! Restart locally to apply.");
+      if (confirm("Settings successfully flushed to disk. Restart the background engine to apply the changes?")) {
+        await fetch("/api/action/restart", { method: "POST" });
+        setMessage("Daemon restart signal sent.");
+      } else {
+        setMessage("Saved successfully! Restart later to apply.");
+      }
     } catch (e) {
       setMessage("Failed to save.");
     }
