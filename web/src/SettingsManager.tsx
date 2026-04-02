@@ -27,6 +27,10 @@ export default function SettingsManager() {
           .split(",")
           .map((s: string) => s.trim())
           .filter(Boolean);
+      } else if (Array.isArray(payloadConfig.targets?.wallets)) {
+        payloadConfig.targets.wallets = payloadConfig.targets.wallets
+          .map((s: string) => s.trim())
+          .filter(Boolean);
       }
 
       await fetch("/api/config", {
@@ -90,18 +94,42 @@ export default function SettingsManager() {
           <div className="glass-panel">
             <div className="panel-header">Targets Network</div>
             <div className="form-group">
-              <label>Wallets to Copy (comma separated)</label>
-              <textarea
-                rows={4}
-                value={Array.isArray(config.targets.wallets) ? config.targets.wallets.join(",\n") : config.targets.wallets}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    targets: { ...config.targets, wallets: e.target.value },
-                  })
-                }
-              />
-              <span className="field-hint">The proxy wallets tracked by the websocket listener natively.</span>
+              <label>Wallets to Copy</label>
+              {(Array.isArray(config.targets.wallets) ? config.targets.wallets : []).map((w: string, idx: number) => (
+                <div key={idx} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                  <input
+                    type="text"
+                    value={w}
+                    onChange={(e) => {
+                      const newWallets = [...config.targets.wallets];
+                      newWallets[idx] = e.target.value;
+                      setConfig({ ...config, targets: { ...config.targets, wallets: newWallets }});
+                    }}
+                    placeholder="0x..."
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      const newWallets = config.targets.wallets.filter((_: any, i: number) => i !== idx);
+                      setConfig({ ...config, targets: { ...config.targets, wallets: newWallets }});
+                    }}
+                  >
+                    X
+                  </button>
+                </div>
+              ))}
+              <button
+                className="btn btn-primary"
+                style={{ marginTop: '0.5rem', alignSelf: 'flex-start' }}
+                onClick={() => {
+                   const curr = Array.isArray(config.targets.wallets) ? config.targets.wallets : [];
+                   setConfig({ ...config, targets: { ...config.targets, wallets: [...curr, ""] }});
+                }}
+              >
+                + Add Wallet
+              </button>
+              <span className="field-hint" style={{ marginTop: '0.5rem', display: 'block' }}>The proxy wallets tracked by the websocket listener natively.</span>
             </div>
             <div className="form-group" style={{ marginTop: '1rem' }}>
               <label>Max Websocket Delay (Staleness filter)</label>
