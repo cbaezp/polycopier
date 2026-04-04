@@ -168,7 +168,7 @@ mod wallet_sync_position_rules {
 
     #[test]
     fn new_active_position_is_inserted() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         state
             .positions
             .insert("tok_a".to_string(), make_pos("tok_a", dec!(10)));
@@ -178,7 +178,7 @@ mod wallet_sync_position_rules {
 
     #[test]
     fn resolved_position_is_removed() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         state
             .positions
             .insert("tok_b".to_string(), make_pos("tok_b", dec!(5)));
@@ -189,7 +189,7 @@ mod wallet_sync_position_rules {
 
     #[test]
     fn existing_position_size_is_updated_on_refresh() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         state
             .positions
             .insert("tok_c".to_string(), make_pos("tok_c", dec!(20)));
@@ -202,7 +202,7 @@ mod wallet_sync_position_rules {
 
     #[test]
     fn unrelated_positions_not_affected_by_remove() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         state
             .positions
             .insert("tok_d".to_string(), make_pos("tok_d", dec!(10)));
@@ -217,7 +217,7 @@ mod wallet_sync_position_rules {
 
     #[test]
     fn remove_nonexistent_key_is_a_noop() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         // Should not panic
         state.positions.remove("does_not_exist");
         assert!(state.positions.is_empty());
@@ -225,7 +225,7 @@ mod wallet_sync_position_rules {
 
     #[test]
     fn multiple_fresh_fills_all_inserted() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         for i in 0..5u32 {
             let key = format!("tok_{i}");
             state

@@ -36,6 +36,8 @@ pub fn test_config() -> Config {
         max_daily_volume_usd: dec!(0),
         max_consecutive_losses: 0,
         loss_cooldown_secs: 300,
+        is_sim: false,
+        sim_balance: None,
     }
 }
 
@@ -109,7 +111,7 @@ pub fn make_position(token_id: &str, size: Decimal) -> (String, Position) {
 
 /// Seeded BotState with total_balance set, for tests that require balance pre-check.
 pub fn state_with_balance(balance: Decimal) -> BotState {
-    let mut s = BotState::new();
+    let mut s = BotState::new(false, None);
     s.total_balance = balance;
     s
 }

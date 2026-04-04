@@ -483,9 +483,9 @@ pub fn start_strategy_engine(
                     calculate_limit_price(event.price, event.side, config.max_slippage_pct);
 
                 let order = if is_closing {
-                    // -- SELL: close our position using our held size (not the target's size) --
-                    // Gap 15: fee buffer is now read from config (default 0.97).
-                    let fee_factor = config.sell_fee_buffer;
+                    // -- SELL: close our position using our 100% held size --
+                    // (Polymarket handles the CTF fee by deducting from the USDC payout,
+                    // we no longer reduce the share count to avoid "dust" shares).
                     let our_held_size = {
                         let guard = state.read().await;
                         guard
@@ -494,11 +494,11 @@ pub fn start_strategy_engine(
                             .map(|p| p.size)
                             .unwrap_or(Decimal::ZERO)
                     };
-                    let sell_size = (our_held_size * fee_factor).round_dp(2);
+
                     Some(OrderRequest {
                         token_id: event.token_id.clone(),
                         price: limit_price,
-                        size: sell_size,
+                        size: our_held_size.round_dp(2),
                         side: event.side,
                     })
                 } else {
@@ -536,12 +536,18 @@ pub fn start_strategy_engine(
                         );
                         None
                     } else {
-                        // Pre-check balance -- avoids noisy 400 errors from CLOB
+                        // Pre-check balance taking the maximum CTF fee overhead into account
+                        // fee = C * feeRate * p * (1 - p). We assume a max 200bps (0.02) feeRate to be safe.
+                        let p = limit_price;
+                        let max_ctf_fee =
+                            buy_size * Decimal::from_str("0.02").unwrap() * p * (Decimal::ONE - p);
                         let order_cost = buy_size * limit_price;
-                        if current_balance < order_cost {
+                        let total_cost = order_cost + max_ctf_fee;
+
+                        if current_balance < total_cost {
                             warn!(
-                                "Insufficient balance (have ${:.2}, need ${:.2}) -- skipping entry",
-                                current_balance, order_cost
+                                "Insufficient balance (have ${:.2}, need ${:.2} including fee) -- skipping entry",
+                                current_balance, total_cost
                             );
                             None
                         } else {
@@ -603,6 +609,8 @@ pub fn start_strategy_engine(
                         None
                     };
 
+                    let is_sim = config.is_sim;
+
                     tokio::spawn(async move {
                         match submitter_clone(order).await {
                             Ok(()) => {
@@ -636,6 +644,35 @@ pub fn start_strategy_engine(
                                         &token_id_clone[..token_id_clone.len().min(12)],
                                         &source_wallet_clone[..source_wallet_clone.len().min(10)],
                                     );
+                                }
+
+                                if is_sim {
+                                    let mut guard = state_clone.write().await;
+                                    let fee_rate = rust_decimal::Decimal::from_str("0.02").unwrap();
+                                    let max_ctf_fee = order_size
+                                        * fee_rate
+                                        * order_price
+                                        * (rust_decimal::Decimal::ONE - order_price);
+
+                                    if is_closing {
+                                        guard.positions.remove(&token_id_clone);
+                                        guard.total_balance +=
+                                            (order_size * order_price) - max_ctf_fee;
+                                    } else {
+                                        // Auto-fill mock position
+                                        guard.positions.insert(
+                                            token_id_clone.clone(),
+                                            crate::models::Position {
+                                                token_id: token_id_clone.clone(),
+                                                size: order_size,
+                                                average_entry_price: order_price,
+                                            },
+                                        );
+                                        guard.total_balance -=
+                                            (order_size * order_price) + max_ctf_fee;
+                                    }
+                                    // Remove from pending logic to match real world
+                                    guard.pending_orders.remove(&token_id_clone);
                                 }
                             }
                             Err(e) => {

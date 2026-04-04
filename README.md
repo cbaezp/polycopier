@@ -325,6 +325,14 @@ cargo run --release -- --daemon
 ```
 Runs the bot entirely in the background, logging strictly to stdout. The terminal interface and the Web Dashboard are both discarded, ensuring a completely headless and silent 24/7 worker.
 
+**4. Simulation Trading Mode (Paper Trading)**
+```bash
+cargo run --release -- --sim [--sim-balance <AMOUNT>]
+```
+Runs the bot in a locally mocked simulation environment. It overrides limit order fetching with instantaneous math calculation, tracks an independent "sim_copy_ledger.json" ledger to protect your actual stats, and initiates with a mock $10,000 baseline! Combine with `--ui` for risk-free Web UI experimentation.
+
+You can strictly override the baseline bankroll by appending the `--sim-balance` flag (e.g. `--sim --sim-balance 500`).
+
 After saving your initial `.env` file via either the terminal or the Web Wizard, `config.toml` is auto-generated using safe defaults.
 
 **Modifying Settings:**
@@ -364,6 +372,7 @@ the ratatui TUI.
 | `polycopier` | Pure Terminal UI | Local monitoring on your machine (Lowest memory footprint) |
 | `polycopier --ui` | Web UI + Headless | Local browser interface on `:3000` |
 | `polycopier --headless` | Pure Headless Worker | Cloud deployment (24/7 logging, TUI discarded, no open ports) |
+| `polycopier --sim [--sim-balance <X>]` | Mock Sim Environment | Paper-trading and UI evaluation with fake baseline limit execution. |
 
 ### Prerequisites
 

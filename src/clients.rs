@@ -137,3 +137,44 @@ pub async fn build_order_submitter(
 
     Ok((order_submitter, balance_fetcher, clob))
 }
+
+pub async fn build_sim_order_submitter(
+    config: &Config,
+) -> Result<(OrderSubmitter, BalanceFetcher, AuthedClobClient)> {
+    // Need to authenticate just to satisfy the AuthedClobClient type requirement
+    // for the application state, although in sim mode it will largely be ignored.
+    let signer = LocalSigner::from_str(&config.private_key)?.with_chain_id(Some(config.chain_id));
+    let funder = Address::from_str(&config.funder_address)?;
+
+    let clob = ClobClient::new("https://clob.polymarket.com", ClobConfig::default())?
+        .authentication_builder(&signer)
+        .funder(funder)
+        .signature_type(SignatureType::Proxy)
+        .authenticate()
+        .await?;
+
+    let balance_fetcher: BalanceFetcher = Arc::new(|| {
+        Box::pin(async move {
+            // Balance is managed internally by the strategy logic in sim mode.
+            // This is just a dummy fetcher.
+            Ok(Decimal::from(10000))
+        })
+    });
+
+    let order_submitter: OrderSubmitter = Arc::new(|order: OrderRequest| {
+        Box::pin(async move {
+            tracing::warn!(
+                "[SIMULATION] Paper-filling Limit Order: Side={:?}, Price={}, Size={}, Token={}",
+                order.side,
+                order.price,
+                order.size,
+                order.token_id
+            );
+            // Simulate normal API delay
+            tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+            Ok(())
+        })
+    });
+
+    Ok((order_submitter, balance_fetcher, clob))
+}

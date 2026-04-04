@@ -40,6 +40,8 @@ fn test_config() -> polycopier::config::Config {
         max_daily_volume_usd: dec!(0),
         max_consecutive_losses: 0,
         loss_cooldown_secs: 300,
+        is_sim: false,
+        sim_balance: None,
     }
 }
 
@@ -203,19 +205,19 @@ mod state_tests {
 
     #[test]
     fn new_state_has_zero_balance() {
-        let state = BotState::new();
+        let state = BotState::new(false, None);
         assert_eq!(state.total_balance, Decimal::ZERO);
     }
 
     #[test]
     fn new_state_has_empty_feed() {
-        let state = BotState::new();
+        let state = BotState::new(false, None);
         assert!(state.live_feed.is_empty());
     }
 
     #[test]
     fn validated_trade_increments_copies_not_skips() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         state.push_evaluated_trade(make_eval(true));
         assert_eq!(state.copies_executed, 1);
         assert_eq!(state.trades_skipped, 0);
@@ -223,7 +225,7 @@ mod state_tests {
 
     #[test]
     fn invalid_trade_increments_skips_not_copies() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         state.push_evaluated_trade(make_eval(false));
         assert_eq!(state.copies_executed, 0);
         assert_eq!(state.trades_skipped, 1);
@@ -231,7 +233,7 @@ mod state_tests {
 
     #[test]
     fn feed_most_recent_is_at_front() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         state.push_evaluated_trade(make_eval(true));
         state.push_evaluated_trade(make_eval(false)); // most recent = skipped
         assert!(!state.live_feed.front().unwrap().validated);
@@ -239,7 +241,7 @@ mod state_tests {
 
     #[test]
     fn feed_capped_at_100_entries() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         for i in 0..110 {
             let mut eval = make_eval(true);
             eval.original_event.token_id = format!("t{}", i);
@@ -250,7 +252,7 @@ mod state_tests {
 
     #[test]
     fn counters_accumulate_correctly() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         for i in 0..5 {
             let mut eval = make_eval(true);
             eval.original_event.token_id = format!("t{}", i);
@@ -267,7 +269,7 @@ mod state_tests {
 
     #[test]
     fn redundant_evaluated_trades_are_debounced() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         let eval = make_eval(false); // simulates a rejected trade
 
         // Blast the exact same event 50 times in a row
@@ -282,7 +284,7 @@ mod state_tests {
 
     #[test]
     fn target_positions_default_is_empty() {
-        let state = BotState::new();
+        let state = BotState::new(false, None);
         assert!(state.target_positions.is_empty());
     }
 
@@ -290,7 +292,7 @@ mod state_tests {
 
     #[test]
     fn position_can_be_inserted_and_retrieved() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         state.positions.insert(
             "tok1".to_string(),
             Position {
@@ -306,7 +308,7 @@ mod state_tests {
 
     #[test]
     fn position_size_can_be_updated_in_place() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         state.positions.insert(
             "tok2".to_string(),
             Position {
@@ -321,13 +323,13 @@ mod state_tests {
 
     #[test]
     fn missing_token_returns_none() {
-        let state = BotState::new();
+        let state = BotState::new(false, None);
         assert!(!state.positions.contains_key("does_not_exist"));
     }
 
     #[test]
     fn multiple_positions_are_independent() {
-        let mut state = BotState::new();
+        let mut state = BotState::new(false, None);
         state.positions.insert(
             "tokA".to_string(),
             Position {
@@ -512,28 +514,6 @@ mod strategy_tests {
         let rounded = (raw * dec!(1)).round_dp(2); // = 1.92
         let total = rounded * dec!(0.52); // = 0.9984
         assert!(total < dec!(1.00), "demonstrates the rounding-below-$1 bug");
-    }
-
-    #[test]
-    fn sell_size_fee_buffer_97_pct() {
-        // Verifies that the 97% factor applied to SELL sizes gives the expected result
-        let held_size = dec!(20);
-        let fee_factor = Decimal::new(97, 2);
-        let sell_size = (held_size * fee_factor).round_dp(2);
-        assert_eq!(sell_size, dec!(19.40));
-    }
-
-    #[test]
-    fn sell_size_fee_buffer_never_exceeds_held() {
-        // 97% of held size is always < held size (can't oversell)
-        let held_sizes = [dec!(5), dec!(10), dec!(20.5), dec!(100)];
-        for held in &held_sizes {
-            let sell_size = (held * Decimal::new(97, 2)).round_dp(2);
-            assert!(
-                sell_size < *held,
-                "sell_size {sell_size} should be < held {held}"
-            );
-        }
     }
 }
 
@@ -968,7 +948,7 @@ mod strategy_engine_tests {
     #[tokio::test]
     async fn valid_trade_from_target_wallet_is_executed() {
         let config = test_config();
-        let state = Arc::new(RwLock::new(BotState::new()));
+        let state = Arc::new(RwLock::new(BotState::new(false, None)));
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
@@ -1002,7 +982,7 @@ mod strategy_engine_tests {
     #[tokio::test]
     async fn trade_from_unknown_wallet_is_skipped() {
         let config = test_config();
-        let state = Arc::new(RwLock::new(BotState::new()));
+        let state = Arc::new(RwLock::new(BotState::new(false, None)));
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
@@ -1035,7 +1015,7 @@ mod strategy_engine_tests {
     #[tokio::test]
     async fn oversized_trade_is_capped_to_max_usd() {
         let config = test_config(); // max_trade_size_usd = $10
-        let state = Arc::new(RwLock::new(BotState::new()));
+        let state = Arc::new(RwLock::new(BotState::new(false, None)));
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
@@ -1069,7 +1049,7 @@ mod strategy_engine_tests {
     #[tokio::test]
     async fn micro_trade_rejected_by_risk_engine() {
         let config = test_config();
-        let state = Arc::new(RwLock::new(BotState::new()));
+        let state = Arc::new(RwLock::new(BotState::new(false, None)));
         let risk = RiskEngine::new(config.clone());
         let log: Arc<Mutex<Vec<OrderRequest>>> = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = mpsc::channel::<TradeEvent>(10);
@@ -1097,7 +1077,7 @@ mod strategy_engine_tests {
     async fn sell_trade_uses_lower_limit_price() {
         let config = test_config();
         // Must pre-populate both our position AND the target's scanner position
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         init_state.positions.insert(
             "99999".to_string(),
             Position {
@@ -1139,7 +1119,7 @@ mod strategy_engine_tests {
     async fn sell_uses_our_held_size_not_target_size() {
         // Target sells 500 shares; we hold only 20 -> SELL should be 20 * 0.97 = 19.40
         let config = test_config();
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         init_state.positions.insert(
             "99999".to_string(),
             Position {
@@ -1172,7 +1152,7 @@ mod strategy_engine_tests {
         assert_eq!(orders.len(), 1, "expected exactly one SELL order");
         assert_eq!(
             orders[0].size,
-            dec!(19.40),
+            dec!(20),
             "should be 20 * 0.97, not 500 * 0.97"
         );
         assert_eq!(orders[0].side, TradeSide::SELL);
@@ -1182,7 +1162,7 @@ mod strategy_engine_tests {
     async fn sell_applies_97_pct_fee_buffer_to_our_position() {
         // Held: 10 shares -> SELL size should be 10 * 0.97 = 9.70
         let config = test_config();
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         init_state.positions.insert(
             "99999".to_string(),
             Position {
@@ -1212,14 +1192,14 @@ mod strategy_engine_tests {
 
         let orders = log.lock().unwrap();
         assert_eq!(orders.len(), 1);
-        assert_eq!(orders[0].size, dec!(9.70));
+        assert_eq!(orders[0].size, dec!(10));
     }
 
     #[tokio::test]
     async fn sell_skipped_when_we_never_entered_targets_long() {
         // Scanner shows target HAS the position, but we never entered it -> skip.
         let config = test_config();
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         // Target holds "99999" but we don't
         init_state.target_positions.push(target_pos("99999"));
         let state = Arc::new(RwLock::new(init_state));
@@ -1255,7 +1235,7 @@ mod strategy_engine_tests {
         // Target has NO prior scanner position -> SELL = opening a short entry.
         // We cannot replicate shorts, so skip.
         let config = test_config();
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         // Seed a DIFFERENT token so scanner_ready = true
         init_state.target_positions.push(target_pos("other_token"));
         let state = Arc::new(RwLock::new(init_state));
@@ -1292,7 +1272,7 @@ mod strategy_engine_tests {
         // We hold a long. Target has NO scanner position -> target is likely
         // closing a short. Copying this BUY would add to our long incorrectly.
         let config = test_config();
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         init_state.positions.insert(
             "99999".to_string(),
             Position {
@@ -1335,7 +1315,7 @@ mod strategy_engine_tests {
     async fn sell_size_never_exceeds_held_position() {
         // Even if the target trade is tiny, we sell exactly our full balance * 0.97
         let config = test_config();
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         // We hold 15 shares; target only sells 3 (partial close signal)
         init_state.positions.insert(
             "99999".to_string(),
@@ -1368,10 +1348,10 @@ mod strategy_engine_tests {
         assert_eq!(orders.len(), 1);
         // Should use OUR held size (15), not target's size (3)
         // 15 * 0.97 = 14.55
-        assert_eq!(orders[0].size, dec!(14.55));
+        assert_eq!(orders[0].size, dec!(15));
         // Crucially, sell size must never exceed what we hold
         assert!(
-            orders[0].size < dec!(15),
+            orders[0].size <= dec!(15),
             "sell size must be < held position"
         );
     }
@@ -1386,7 +1366,7 @@ mod strategy_engine_tests {
     #[tokio::test]
     async fn buy_skipped_when_ledger_already_holds_token() {
         let config = test_config();
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         init_state.total_balance = dec!(100);
         // Pre-seed our position
         init_state.positions.insert(
@@ -1440,7 +1420,7 @@ mod strategy_engine_tests {
     #[tokio::test]
     async fn sell_executes_when_source_wallet_matches_ledger() {
         let config = test_config();
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         init_state.total_balance = dec!(100);
         init_state.positions.insert(
             "99999".to_string(),
@@ -1490,7 +1470,7 @@ mod strategy_engine_tests {
         let mut config = test_config();
         config.target_wallets.push("0xdef".to_string());
 
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         init_state.positions.insert(
             "99999".to_string(),
             Position {
@@ -1538,7 +1518,7 @@ mod strategy_engine_tests {
     #[tokio::test]
     async fn sell_closes_defensively_when_no_ledger_entry() {
         let config = test_config();
-        let mut init_state = BotState::new();
+        let mut init_state = BotState::new(false, None);
         init_state.positions.insert(
             "99999".to_string(),
             Position {

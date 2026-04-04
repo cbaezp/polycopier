@@ -167,6 +167,8 @@ pub struct Config {
     pub max_daily_volume_usd: Decimal,
     pub max_consecutive_losses: u32,
     pub loss_cooldown_secs: u64,
+    pub is_sim: bool,
+    pub sim_balance: Option<rust_decimal::Decimal>,
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +616,8 @@ impl Config {
             max_daily_volume_usd: cfg.risk.max_daily_volume_usd,
             max_consecutive_losses: cfg.risk.max_consecutive_losses,
             loss_cooldown_secs: cfg.risk.loss_cooldown_secs,
+            is_sim: false, // Injected dynamically in Config::load_or_prompt wrapper
+            sim_balance: None,
         }
     }
 
@@ -637,6 +641,8 @@ pub struct CliArgs {
     pub is_ui: bool,
     pub skip_open: bool,
     pub headless: bool,
+    pub is_sim: bool,
+    pub sim_balance: Option<Decimal>,
 }
 
 pub fn parse_cli_args(args: &[String]) -> CliArgs {
@@ -644,11 +650,22 @@ pub fn parse_cli_args(args: &[String]) -> CliArgs {
     let is_ui = args.iter().any(|a| a == "--ui" || a == "--ui-reboot");
     let skip_open = args.iter().any(|a| a == "--ui-reboot");
     let headless = is_daemon || is_ui;
+    let is_sim = args.iter().any(|a| a == "--sim");
+    let mut sim_balance = None;
+    if let Some(idx) = args.iter().position(|a| a == "--sim-balance") {
+        if let Some(val) = args.get(idx + 1) {
+            if let Ok(d) = rust_decimal::Decimal::from_str(val) {
+                sim_balance = Some(d);
+            }
+        }
+    }
 
     CliArgs {
         is_daemon,
         is_ui,
         skip_open,
         headless,
+        is_sim,
+        sim_balance,
     }
 }
