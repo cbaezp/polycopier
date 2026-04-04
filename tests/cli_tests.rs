@@ -57,3 +57,40 @@ fn test_cli_headless_alias() {
     assert!(cli.is_daemon, "--headless is an alias for daemon");
     assert!(cli.headless);
 }
+
+#[test]
+fn test_cli_sim_mode() {
+    let args = vec!["polycopier".to_string(), "--sim".to_string()];
+    let cli = parse_cli_args(&args);
+
+    assert!(cli.is_sim, "--sim should trigger simulation mode");
+    assert!(!cli.is_ui, "Sim should not imply UI by itself");
+    assert!(!cli.is_daemon, "Sim should not imply Daemon by itself");
+}
+
+#[test]
+fn test_cli_sim_with_ui() {
+    let args = vec![
+        "polycopier".to_string(),
+        "--sim".to_string(),
+        "--ui".to_string(),
+    ];
+    let cli = parse_cli_args(&args);
+
+    assert!(cli.is_sim, "--sim with --ui retains sim flag");
+    assert!(cli.is_ui, "--sim with --ui retains UI flag");
+}
+
+#[test]
+fn test_cli_sim_balance_parsing() {
+    let args = vec![
+        "polycopier".to_string(),
+        "--sim".to_string(),
+        "--sim-balance".to_string(),
+        "5000".to_string(),
+    ];
+    let cli = parse_cli_args(&args);
+
+    assert!(cli.is_sim);
+    assert_eq!(cli.sim_balance, Some(rust_decimal::Decimal::from(5000)));
+}

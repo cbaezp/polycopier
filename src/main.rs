@@ -113,13 +113,27 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let config = config::Config::load_or_prompt(is_ui).await?;
-    let state = Arc::new(RwLock::new(state::BotState::new()));
+    let mut config = config::Config::load_or_prompt(is_ui).await?;
+    config.is_sim = cli.is_sim;
+    config.sim_balance = cli.sim_balance;
+
+    if config.is_sim {
+        tracing::warn!("===========================================================");
+        tracing::warn!("                 SIMULATION MODE ACTIVE                    ");
+        tracing::warn!("   No real orders will be placed. Tracking mock P&L.       ");
+        tracing::warn!("===========================================================");
+    }
+
+    let state = Arc::new(RwLock::new(state::BotState::new(config.is_sim, config.sim_balance)));
     // Wrap RiskEngine in Arc<Mutex<>> so both strategy engine and order watcher
     // can reference it — order watcher calls record_loss() on loss-triggered cancels.
     let risk_engine = Arc::new(Mutex::new(risk::RiskEngine::new(config.clone())));
 
-    let (poly_submitter, balance_fetcher, clob) = clients::build_order_submitter(&config).await?;
+    let (poly_submitter, balance_fetcher, clob) = if config.is_sim {
+        clients::build_sim_order_submitter(&config).await?
+    } else {
+        clients::build_order_submitter(&config).await?
+    };
 
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(100);
     listener::start_ws_listener(&config, event_tx.clone()).await?;
@@ -128,7 +142,8 @@ async fn main() -> anyhow::Result<()> {
     // Load the persisted copy ledger.  This records which positions we entered
     // and from which target wallet, enabling correct SELL classification and the
     // one-position-per-token rule across restarts.
-    let copy_ledger = Arc::new(Mutex::new(copy_ledger::CopyLedger::load()));
+    let ledger_path = if config.is_sim { "sim_copy_ledger.json" } else { "copy_ledger.json" };
+    let copy_ledger = Arc::new(Mutex::new(copy_ledger::CopyLedger::load_from(ledger_path)));
 
     strategy::start_strategy_engine(
         event_rx,
@@ -144,8 +159,10 @@ async fn main() -> anyhow::Result<()> {
     // Seed OUR positions AND live GTC orders before starting the scanner.
     // Both must complete so the scanner's first run sees accurate SkippedOwned
     // and already-queued state — preventing duplicate orders on restart.
-    wallet_sync::seed_own_positions(&config.funder_address, state.clone()).await;
-    wallet_sync::seed_pending_orders(&clob, state.clone()).await;
+    if !config.is_sim {
+        wallet_sync::seed_own_positions(&config.funder_address, state.clone()).await;
+        wallet_sync::seed_pending_orders(&clob, state.clone()).await;
+    }
 
     // Reconcile the copy ledger against our live wallet positions.
     // Any open ledger entry where we no longer hold the token is marked closed.
@@ -163,12 +180,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Ongoing wallet sync (positions, prices, balance) — all fire-and-forget loops.
     wallet_sync::start_position_sync(
-        config.funder_address.clone(),
+        config.clone(), // Pass the full config so it can check is_sim
         state.clone(),
         copy_ledger.clone(), // Gap 4: passed so sync can update fill sizes
     );
     wallet_sync::start_price_refresh(config.target_wallets.clone(), state.clone());
-    wallet_sync::start_balance_poll(balance_fetcher, state.clone());
+    
+    if !config.is_sim {
+        wallet_sync::start_balance_poll(balance_fetcher, state.clone());
+    }
 
     // Position scanner — safe to start now; seed has completed.
     position_scanner::start_position_scanner(config.clone(), state.clone(), event_tx.clone());
@@ -194,7 +214,9 @@ async fn main() -> anyhow::Result<()> {
     // Order watcher (cancel stale GTC orders every 10 s)
     // Gap C + Gap E: now receives risk_engine Arc to call record_loss() on loss-triggered
     // cancellations, and uses exponential backoff on CLOB errors.
-    order_watcher::start_order_watcher(config.clone(), clob, state.clone(), risk_engine);
+    if !config.is_sim {
+        order_watcher::start_order_watcher(config.clone(), clob, state.clone(), risk_engine);
+    }
 
     // ── Local Web API Server ──────────────────────────────────────────────────
     let api_router = api::create_router(state.clone(), copy_ledger.clone());

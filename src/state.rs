@@ -37,11 +37,14 @@ pub struct BotState {
 }
 
 impl BotState {
-    pub fn new() -> Self {
+    pub fn new(is_sim: bool, sim_balance: Option<Decimal>) -> Self {
+        // Initialize balance to $10,000 for simulation (or override)
+        let initial_balance = if is_sim { sim_balance.unwrap_or(Decimal::from(10000)) } else { Decimal::from(0) };
+
         Self {
             positions: HashMap::new(),
             live_feed: VecDeque::with_capacity(100),
-            total_balance: Decimal::from(0),
+            total_balance: initial_balance,
             unrealized_pnl: Decimal::from(0),
             realized_pnl: Decimal::from(0),
             started: false,
@@ -86,6 +89,6 @@ impl BotState {
 
 impl Default for BotState {
     fn default() -> Self {
-        Self::new()
+        Self::new(false, None)
     }
 }
