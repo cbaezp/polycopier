@@ -494,7 +494,7 @@ pub fn start_strategy_engine(
                             .map(|p| p.size)
                             .unwrap_or(Decimal::ZERO)
                     };
-                    
+
                     Some(OrderRequest {
                         token_id: event.token_id.clone(),
                         price: limit_price,
@@ -539,7 +539,8 @@ pub fn start_strategy_engine(
                         // Pre-check balance taking the maximum CTF fee overhead into account
                         // fee = C * feeRate * p * (1 - p). We assume a max 200bps (0.02) feeRate to be safe.
                         let p = limit_price;
-                        let max_ctf_fee = buy_size * Decimal::from_str("0.02").unwrap() * p * (Decimal::ONE - p);
+                        let max_ctf_fee =
+                            buy_size * Decimal::from_str("0.02").unwrap() * p * (Decimal::ONE - p);
                         let order_cost = buy_size * limit_price;
                         let total_cost = order_cost + max_ctf_fee;
 
@@ -648,19 +649,27 @@ pub fn start_strategy_engine(
                                 if is_sim {
                                     let mut guard = state_clone.write().await;
                                     let fee_rate = rust_decimal::Decimal::from_str("0.02").unwrap();
-                                    let max_ctf_fee = order_size * fee_rate * order_price * (rust_decimal::Decimal::ONE - order_price);
-                                    
+                                    let max_ctf_fee = order_size
+                                        * fee_rate
+                                        * order_price
+                                        * (rust_decimal::Decimal::ONE - order_price);
+
                                     if is_closing {
                                         guard.positions.remove(&token_id_clone);
-                                        guard.total_balance += (order_size * order_price) - max_ctf_fee;
+                                        guard.total_balance +=
+                                            (order_size * order_price) - max_ctf_fee;
                                     } else {
                                         // Auto-fill mock position
-                                        guard.positions.insert(token_id_clone.clone(), crate::models::Position {
-                                            token_id: token_id_clone.clone(),
-                                            size: order_size,
-                                            average_entry_price: order_price,
-                                        });
-                                        guard.total_balance -= (order_size * order_price) + max_ctf_fee;
+                                        guard.positions.insert(
+                                            token_id_clone.clone(),
+                                            crate::models::Position {
+                                                token_id: token_id_clone.clone(),
+                                                size: order_size,
+                                                average_entry_price: order_price,
+                                            },
+                                        );
+                                        guard.total_balance -=
+                                            (order_size * order_price) + max_ctf_fee;
                                     }
                                     // Remove from pending logic to match real world
                                     guard.pending_orders.remove(&token_id_clone);

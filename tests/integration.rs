@@ -515,8 +515,6 @@ mod strategy_tests {
         let total = rounded * dec!(0.52); // = 0.9984
         assert!(total < dec!(1.00), "demonstrates the rounding-below-$1 bug");
     }
-
-
 }
 
 // -- Position scanner: classify_position --------------------------------------

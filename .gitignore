@@ -16,6 +16,8 @@ bot.log
 
 # Persistent runtime state — auto-created on first trade, never commit
 copy_ledger.json
+sim_copy_ledger.json
+*.json.tmp
 
 # Editor / IDE
 .idea/

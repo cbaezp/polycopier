@@ -39,7 +39,11 @@ pub struct BotState {
 impl BotState {
     pub fn new(is_sim: bool, sim_balance: Option<Decimal>) -> Self {
         // Initialize balance to $10,000 for simulation (or override)
-        let initial_balance = if is_sim { sim_balance.unwrap_or(Decimal::from(10000)) } else { Decimal::from(0) };
+        let initial_balance = if is_sim {
+            sim_balance.unwrap_or(Decimal::from(10000))
+        } else {
+            Decimal::from(0)
+        };
 
         Self {
             positions: HashMap::new(),

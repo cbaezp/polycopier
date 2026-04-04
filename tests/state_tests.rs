@@ -1,5 +1,5 @@
-use rust_decimal::Decimal;
 use polycopier::state::BotState;
+use rust_decimal::Decimal;
 
 #[test]
 fn test_bot_state_initializes_with_zero_for_live() {

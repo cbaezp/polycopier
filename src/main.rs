@@ -124,7 +124,10 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("===========================================================");
     }
 
-    let state = Arc::new(RwLock::new(state::BotState::new(config.is_sim, config.sim_balance)));
+    let state = Arc::new(RwLock::new(state::BotState::new(
+        config.is_sim,
+        config.sim_balance,
+    )));
     // Wrap RiskEngine in Arc<Mutex<>> so both strategy engine and order watcher
     // can reference it — order watcher calls record_loss() on loss-triggered cancels.
     let risk_engine = Arc::new(Mutex::new(risk::RiskEngine::new(config.clone())));
@@ -142,7 +145,11 @@ async fn main() -> anyhow::Result<()> {
     // Load the persisted copy ledger.  This records which positions we entered
     // and from which target wallet, enabling correct SELL classification and the
     // one-position-per-token rule across restarts.
-    let ledger_path = if config.is_sim { "sim_copy_ledger.json" } else { "copy_ledger.json" };
+    let ledger_path = if config.is_sim {
+        "sim_copy_ledger.json"
+    } else {
+        "copy_ledger.json"
+    };
     let copy_ledger = Arc::new(Mutex::new(copy_ledger::CopyLedger::load_from(ledger_path)));
 
     strategy::start_strategy_engine(
@@ -185,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
         copy_ledger.clone(), // Gap 4: passed so sync can update fill sizes
     );
     wallet_sync::start_price_refresh(config.target_wallets.clone(), state.clone());
-    
+
     if !config.is_sim {
         wallet_sync::start_balance_poll(balance_fetcher, state.clone());
     }

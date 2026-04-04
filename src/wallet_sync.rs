@@ -119,12 +119,18 @@ pub async fn seed_pending_orders(clob: &AuthedClobClient, state: State) {
 //    Gap 4: also calls ledger.update_fill() when a position size differs from
 //    the recorded order size (partial fills).
 // ---------------------------------------------------------------------------
-pub fn start_position_sync(config: crate::config::Config, state: State, copy_ledger: Arc<Mutex<CopyLedger>>) {
+pub fn start_position_sync(
+    config: crate::config::Config,
+    state: State,
+    copy_ledger: Arc<Mutex<CopyLedger>>,
+) {
     if config.is_sim {
-        tracing::warn!("Simulation Mode: skipping start_position_sync (assuming instant exact fills).");
+        tracing::warn!(
+            "Simulation Mode: skipping start_position_sync (assuming instant exact fills)."
+        );
         return;
     }
-    
+
     let funder = config.funder_address.clone();
     tokio::spawn(async move {
         let client = DataClient::default();

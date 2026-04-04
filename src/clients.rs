@@ -141,7 +141,7 @@ pub async fn build_order_submitter(
 pub async fn build_sim_order_submitter(
     config: &Config,
 ) -> Result<(OrderSubmitter, BalanceFetcher, AuthedClobClient)> {
-    // Need to authenticate just to satisfy the AuthedClobClient type requirement 
+    // Need to authenticate just to satisfy the AuthedClobClient type requirement
     // for the application state, although in sim mode it will largely be ignored.
     let signer = LocalSigner::from_str(&config.private_key)?.with_chain_id(Some(config.chain_id));
     let funder = Address::from_str(&config.funder_address)?;
