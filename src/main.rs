@@ -81,6 +81,42 @@ async fn main() -> anyhow::Result<()> {
             "polycopier starting in DAEMON mode. Send SIGTERM or SIGINT (Ctrl-C) to stop."
         );
     } else if is_ui {
+        // Automatically build the UI if it hasn't been built yet
+        if !std::path::Path::new("web/dist").exists() {
+            tracing::info!("UI build not found. Attempting to build automatically...");
+            let node_check = std::process::Command::new("node").arg("-v").output();
+            if node_check.is_err() {
+                tracing::error!("Node.js and npm are required to build the Web UI. Please install them and try again.");
+                std::process::exit(1);
+            }
+            
+            tracing::info!("Installing npm dependencies...");
+            let install_status = std::process::Command::new("npm")
+                .arg("install")
+                .current_dir("web")
+                .status()
+                .expect("Failed to execute npm install");
+            
+            if !install_status.success() {
+                tracing::error!("npm install failed.");
+                std::process::exit(1);
+            }
+
+            tracing::info!("Building Web UI...");
+            let build_status = std::process::Command::new("npm")
+                .arg("run")
+                .arg("build")
+                .current_dir("web")
+                .status()
+                .expect("Failed to execute npm run build");
+
+            if !build_status.success() {
+                tracing::error!("npm run build failed.");
+                std::process::exit(1);
+            }
+            tracing::info!("Web UI successfully built.");
+        }
+
         tracing::info!(
             "polycopier starting in Web UI mode. Dashboard available at http://localhost:3000"
         );
