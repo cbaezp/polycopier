@@ -89,14 +89,14 @@ async fn main() -> anyhow::Result<()> {
                 tracing::error!("Node.js and npm are required to build the Web UI. Please install them and try again.");
                 std::process::exit(1);
             }
-            
+
             tracing::info!("Installing npm dependencies...");
             let install_status = std::process::Command::new("npm")
                 .arg("install")
                 .current_dir("web")
                 .status()
                 .expect("Failed to execute npm install");
-            
+
             if !install_status.success() {
                 tracing::error!("npm install failed.");
                 std::process::exit(1);
