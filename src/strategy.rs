@@ -255,6 +255,76 @@ pub fn make_no_op_holds_query() -> HoldsQuery {
     Arc::new(|_wallet: String, _token_id: String| Box::pin(async { None::<bool> }))
 }
 
+// ---------------------------------------------------------------------------
+// Injectable market end-date checker
+// ---------------------------------------------------------------------------
+
+pub type EndDateQuery = Arc<
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = Option<chrono::DateTime<chrono::Utc>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+pub fn make_live_end_date_query() -> EndDateQuery {
+    Arc::new(|token_id: String| {
+        Box::pin(async move {
+            let client = polymarket_client_sdk::gamma::Client::default();
+            let Ok(u) = polymarket_client_sdk::types::U256::from_str(&token_id) else {
+                return None;
+            };
+            let req = polymarket_client_sdk::gamma::types::request::MarketsRequest::builder()
+                .clob_token_ids(vec![u])
+                .build();
+            match tokio::time::timeout(Duration::from_secs(5), client.markets(&req)).await {
+                Ok(Ok(markets)) => markets.into_iter().next().and_then(|m| m.end_date),
+                Ok(Err(e)) => {
+                    warn!("Live end_date query failed for {}: {}", &token_id[..10], e);
+                    None
+                }
+                Err(_) => {
+                    warn!("Live end_date query timed out for {}", &token_id[..10]);
+                    None
+                }
+            }
+        })
+    })
+}
+
+pub fn make_no_op_end_date_query() -> EndDateQuery {
+    Arc::new(|_token_id: String| Box::pin(async { None }))
+}
+
+// ---------------------------------------------------------------------------
+// End Date Cache
+// ---------------------------------------------------------------------------
+
+struct EndDateCache {
+    inner: HashMap<String, chrono::DateTime<chrono::Utc>>,
+}
+
+impl EndDateCache {
+    fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
+
+    async fn get_or_fetch(
+        &mut self,
+        token_id: &str,
+        query: &EndDateQuery,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        if let Some(ed) = self.inner.get(token_id) {
+            return Some(*ed);
+        }
+        if let Some(ed) = query(token_id.to_string()).await {
+            self.inner.insert(token_id.to_string(), ed);
+            return Some(ed);
+        }
+        None
+    }
+}
+
 pub fn start_strategy_engine(
     mut rx: mpsc::Receiver<TradeEvent>,
     state: Arc<RwLock<BotState>>,
@@ -263,12 +333,14 @@ pub fn start_strategy_engine(
     config: Config,
     copy_ledger: Arc<Mutex<CopyLedger>>,
     holds_query: HoldsQuery,
+    end_date_query: EndDateQuery,
 ) {
     tokio::spawn(async move {
         info!("Strategy Engine Started. Monitoring edge cases (debouncing, closures...)");
 
         let mut debounce = DebounceCache::new();
         let mut live_cache = LiveQueryCache::new();
+        let mut end_date_cache = EndDateCache::new();
         // Periodic cache maintenance counter
         let mut event_count: u32 = 0;
 
@@ -322,6 +394,32 @@ pub fn start_strategy_engine(
             //   target's wallet live; for SELL events we query OUR wallet live.
             //   Results are cached for LIVE_QUERY_CACHE_TTL_SECS seconds to reduce
             //   API calls and latency for burst activity.
+
+            let mut resolved_end_date = None;
+
+            if eval.validated {
+                // Check market closing soon (before resolving holdings to save time if skipped)
+                if let Some(skip_mins) = config.ignore_closing_in_mins {
+                    let ed = end_date_cache
+                        .get_or_fetch(&event.token_id, &end_date_query)
+                        .await;
+                    resolved_end_date = ed;
+                    if let Some(end_date) = ed {
+                        let cutoff =
+                            chrono::Utc::now() + chrono::Duration::minutes(skip_mins as i64);
+                        if end_date <= cutoff {
+                            eval.validated = false;
+                            eval.reason = Some(format!(
+                                "Market closes in < {} mins (at {})",
+                                skip_mins,
+                                end_date.format("%H:%M UTC")
+                            ));
+                            warn!("Trade skipped: {}", eval.reason.as_ref().unwrap());
+                        }
+                    }
+                }
+            }
+
             if eval.validated {
                 // --- Resolve live state for this token ---
 
@@ -586,6 +684,7 @@ pub fn start_strategy_engine(
                                 price: order.price,
                                 size: order.size,
                                 side: order.side,
+                                event_end_date: resolved_end_date,
                             },
                         );
                     }

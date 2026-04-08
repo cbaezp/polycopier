@@ -62,6 +62,8 @@ pub struct ExecutionConfig {
     pub max_delay_seconds: i64,
     /// SELL size = held_size × sell_fee_buffer. Absorbs CLOB fee. Default 0.97.
     pub sell_fee_buffer: Decimal,
+    /// Skip entries and cancel pending orders for markets that close within this many minutes.
+    pub ignore_closing_in_mins: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +113,7 @@ impl Default for BotConfig {
                 max_trade_size_usd: Decimal::from_str("10.00").unwrap(),
                 max_delay_seconds: 10,
                 sell_fee_buffer: Decimal::from_str("0.97").unwrap(),
+                ignore_closing_in_mins: Some(15),
             },
             sizing: SizingConfig {
                 mode: "self_pct".to_string(),
@@ -155,6 +158,7 @@ pub struct Config {
     pub max_slippage_pct: Decimal,
     pub max_trade_size_usd: Decimal,
     pub max_delay_seconds: i64,
+    pub ignore_closing_in_mins: Option<u64>,
     pub max_copy_loss_pct: Decimal,
     pub max_copy_gain_pct: Decimal,
     pub min_entry_price: Decimal,
@@ -239,6 +243,8 @@ max_trade_size_usd = {max_trade}
 max_delay_seconds = {delay}
 # SELL size = held_size x sell_fee_buffer (absorbs CLOB fee, default 0.97)
 sell_fee_buffer = {fee_buf}
+# Skip markets closing in less than X minutes (e.g. 15)
+{ignore_closing}
 
 [sizing]
 # Sizing algorithm: "self_pct" | "target_usd" | "fixed"
@@ -275,6 +281,10 @@ retention_days = {retention}
         max_trade = cfg.execution.max_trade_size_usd,
         delay = cfg.execution.max_delay_seconds,
         fee_buf = cfg.execution.sell_fee_buffer,
+        ignore_closing = match cfg.execution.ignore_closing_in_mins {
+            Some(m) => format!("ignore_closing_in_mins = {}", m),
+            None => "# ignore_closing_in_mins = 15".to_string(),
+        },
         mode = cfg.sizing.mode,
         copy_size_line = match cfg.sizing.copy_size_pct {
             Some(p) => format!("copy_size_pct = {p}"),
@@ -379,6 +389,10 @@ fn migrate_from_env(defaults: BotConfig) -> BotConfig {
             max_trade_size_usd: dec("MAX_TRADE_SIZE_USD", defaults.execution.max_trade_size_usd),
             max_delay_seconds: i64v("MAX_DELAY_SECONDS", defaults.execution.max_delay_seconds),
             sell_fee_buffer: dec("SELL_FEE_BUFFER", defaults.execution.sell_fee_buffer),
+            ignore_closing_in_mins: env::var("IGNORE_CLOSING_IN_MINS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(defaults.execution.ignore_closing_in_mins),
         },
         sizing: SizingConfig {
             mode: sizing_mode,
@@ -604,6 +618,7 @@ impl Config {
             max_slippage_pct: cfg.execution.max_slippage_pct,
             max_trade_size_usd: cfg.execution.max_trade_size_usd,
             max_delay_seconds: cfg.execution.max_delay_seconds,
+            ignore_closing_in_mins: cfg.execution.ignore_closing_in_mins,
             max_copy_loss_pct: cfg.scanner.max_copy_loss_pct,
             max_copy_gain_pct: cfg.scanner.max_copy_gain_pct,
             min_entry_price: cfg.scanner.min_entry_price,

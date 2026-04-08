@@ -174,6 +174,24 @@ export default function SettingsManager() {
                 <span className="field-hint">seconds</span>
               </div>
             </div>
+            
+            <div className="form-group" style={{ marginTop: '1rem' }}>
+              <label>Ignore Markets Closing Within</label>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  type="number"
+                  style={{ width: '100px' }}
+                  value={config.execution.ignore_closing_in_mins ?? ''}
+                  placeholder="Disabled"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const parsed = val ? parseInt(val) : null;
+                    setConfig({ ...config, execution: { ...config.execution, ignore_closing_in_mins: parsed } })
+                  }}
+                />
+                <span className="field-hint">minutes (Leave blank to disable)</span>
+              </div>
+            </div>
           </div>
 
           <div className="glass-panel">

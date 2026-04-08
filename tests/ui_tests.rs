@@ -112,10 +112,10 @@ fn screen_starts_at_first_field() {
 }
 
 #[test]
-fn screen_has_sixteen_fields() {
+fn screen_has_seventeen_fields() {
     // After config split and target wallets, the screen has 16 fields covering all tunables.
     let s = SettingsScreen::new();
-    assert_eq!(s.fields.len(), 16);
+    assert_eq!(s.fields.len(), 17);
 }
 
 // ── SettingsScreen change detection ──────────────────────────────────────────
@@ -320,7 +320,7 @@ fn save_to_path_writes_correct_max_entries_value() {
     let tmp = tempfile_path();
     let mut s = minimal_screen();
     // scanner.max_entries_per_cycle (field 11) = "3"
-    s.fields[11].value = "3".into();
+    s.fields[12].value = "3".into();
     s.save_to_path(&tmp).expect("save failed");
 
     let content = std::fs::read_to_string(&tmp).unwrap();
@@ -335,7 +335,7 @@ fn save_to_path_writes_correct_max_entries_value() {
 fn save_to_path_writes_risk_section() {
     let tmp = tempfile_path();
     let mut s = minimal_screen();
-    s.fields[13].value = "5".into(); // max_consecutive_losses
+    s.fields[14].value = "5".into(); // max_consecutive_losses
     s.save_to_path(&tmp).expect("save failed");
 
     let content = std::fs::read_to_string(&tmp).unwrap();

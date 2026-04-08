@@ -19,9 +19,6 @@ pub fn start_order_watcher(
     state: Arc<RwLock<BotState>>,
     risk_engine: Arc<Mutex<RiskEngine>>,
 ) {
-    let target_wallets = config.target_wallets.clone();
-    let max_loss = config.max_copy_loss_pct;
-
     tokio::spawn(async move {
         // give the clob client some time to breathe before polling
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -29,16 +26,7 @@ pub fn start_order_watcher(
         let mut consecutive_errors: u32 = 0;
 
         loop {
-            match run_once(
-                &clob,
-                &data_client,
-                &target_wallets,
-                max_loss,
-                &state,
-                &risk_engine,
-            )
-            .await
-            {
+            match run_once(&config, &clob, &data_client, &state, &risk_engine).await {
                 Ok(_) => {
                     consecutive_errors = 0;
                     // Stamp AFTER a successful run so TUI shows accurate "Xs ago"
@@ -63,13 +51,14 @@ pub fn start_order_watcher(
 }
 
 async fn run_once(
+    config: &Config,
     clob: &AuthedClobClient,
     data_client: &DataClient,
-    target_wallets: &[String],
-    max_loss: Decimal,
     state: &Arc<RwLock<BotState>>,
     risk_engine: &Arc<Mutex<RiskEngine>>,
 ) -> anyhow::Result<()> {
+    let target_wallets = &config.target_wallets;
+    let max_loss = config.max_copy_loss_pct;
     // 1. Fetch our open live orders
     let req = OrdersRequest::default();
     let orders_page = clob.orders(&req, None).await?;
@@ -185,6 +174,23 @@ async fn run_once(
             // Target(s) no longer hold this position! They sold.
             should_cancel = true;
             reason = "Target closed position (zero balance)";
+        }
+
+        // Feature: Ignore markets closing in less than X minutes
+        if !should_cancel {
+            if let Some(skip_mins) = config.ignore_closing_in_mins {
+                let guard = state.read().await;
+                if let Some(pending) = guard.pending_orders.get(tid) {
+                    if let Some(ed) = pending.event_end_date {
+                        let cutoff =
+                            chrono::Utc::now() + chrono::Duration::minutes(skip_mins as i64);
+                        if ed <= cutoff {
+                            should_cancel = true;
+                            reason = "Market is closing soon (threshold reached)";
+                        }
+                    }
+                }
+            }
         }
 
         if should_cancel {

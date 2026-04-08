@@ -99,6 +99,7 @@ pub async fn seed_pending_orders(clob: &AuthedClobClient, state: State) {
                             price,
                             size,
                             side,
+                            event_end_date: None,
                         },
                     );
                 }
