@@ -130,13 +130,13 @@ pub fn start_position_sync(
                     Ok(positions) => {
                         consecutive_errors = 0;
                         let mut guard = state.write().await;
+                        guard.positions.clear();
                         for p in &positions {
                             if p.redeemable
                                 || p.cur_price == Decimal::ZERO
                                 || p.size <= Decimal::ZERO
                             {
-                                // Market resolved or position completely liquidated — remove stale entry.
-                                guard.positions.remove(&p.asset.to_string());
+                                continue;
                             } else {
                                 guard.positions.insert(
                                     p.asset.to_string(),
