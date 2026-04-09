@@ -603,15 +603,21 @@ pub fn start_strategy_engine(
                             .unwrap_or(Decimal::ZERO)
                     };
 
-                    Some((
-                        OrderRequest {
-                            token_id: event.token_id.clone(),
-                            price: limit_price,
-                            size: our_held_size,
-                            side: event.side,
-                        },
-                        Decimal::ZERO,
-                    ))
+                    let truncated_size = our_held_size.trunc_with_scale(2);
+                    if truncated_size <= rust_decimal::Decimal::ZERO {
+                        tracing::warn!("Dust fractional balance {:.4} truncates to 0.00 — skipping limit order logic and delegating to Gasless Relayer.", our_held_size);
+                        None
+                    } else {
+                        Some((
+                            OrderRequest {
+                                token_id: event.token_id.clone(),
+                                price: limit_price,
+                                size: truncated_size,
+                                side: event.side,
+                            },
+                            Decimal::ZERO,
+                        ))
+                    }
                 } else {
                     // -- BUY: size according to active SizingMode, capped and $5 floored --
                     let current_balance = {
