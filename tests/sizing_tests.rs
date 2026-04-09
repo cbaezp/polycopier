@@ -37,10 +37,11 @@ fn fixed_always_returns_max() {
 }
 
 #[test]
-fn fixed_ignores_balance_changes() {
+fn fixed_dynamic_caps_balance() {
     let usd_small = size(dec!(5), &SizingMode::Fixed, None, dec!(10), dec!(0));
     let usd_large = size(dec!(10000), &SizingMode::Fixed, None, dec!(10), dec!(0));
-    assert_eq!(usd_small, usd_large);
+    assert_eq!(usd_small, dec!(5) / dec!(1.02));
+    assert_eq!(usd_large, dec!(10));
 }
 
 #[test]
@@ -158,8 +159,8 @@ fn target_usd_exact_max_boundary() {
 }
 
 #[test]
-fn target_usd_ignores_our_balance() {
-    // Our balance doesn't matter for TargetUsd
+fn target_usd_respects_balance_floor() {
+    // Our balance caps the target_notional if it exceeds available margin
     let small = size(dec!(10), &SizingMode::TargetUsd, None, dec!(50), dec!(30));
     let large = size(
         dec!(10000),
@@ -168,8 +169,8 @@ fn target_usd_ignores_our_balance() {
         dec!(50),
         dec!(30),
     );
-    assert_eq!(small, large);
-    assert_eq!(small, dec!(30));
+    assert_eq!(small, dec!(10) / dec!(1.02));
+    assert_eq!(large, dec!(30));
 }
 
 // -- SizingMode::TargetScalar -------------------------------------------------
