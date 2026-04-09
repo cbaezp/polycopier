@@ -17,6 +17,7 @@ pub fn start_order_watcher(
     config: Config,
     clob: AuthedClobClient,
     state: Arc<RwLock<BotState>>,
+    copy_ledger: Arc<tokio::sync::Mutex<crate::copy_ledger::CopyLedger>>,
     risk_engine: Arc<Mutex<RiskEngine>>,
 ) {
     tokio::spawn(async move {
@@ -26,7 +27,16 @@ pub fn start_order_watcher(
         let mut consecutive_errors: u32 = 0;
 
         loop {
-            match run_once(&config, &clob, &data_client, &state, &risk_engine).await {
+            match run_once(
+                &config,
+                &clob,
+                &data_client,
+                &state,
+                &copy_ledger,
+                &risk_engine,
+            )
+            .await
+            {
                 Ok(_) => {
                     consecutive_errors = 0;
                     // Stamp AFTER a successful run so TUI shows accurate "Xs ago"
@@ -55,6 +65,7 @@ async fn run_once(
     clob: &AuthedClobClient,
     data_client: &DataClient,
     state: &Arc<RwLock<BotState>>,
+    copy_ledger: &Arc<tokio::sync::Mutex<crate::copy_ledger::CopyLedger>>,
     risk_engine: &Arc<Mutex<RiskEngine>>,
 ) -> anyhow::Result<()> {
     let target_wallets = &config.target_wallets;
@@ -198,6 +209,17 @@ async fn run_once(
         }
 
         // Feature: Ignore markets closing in less than X minutes
+        if !should_cancel {
+            let ledger = copy_ledger.lock().await;
+            let guard = state.read().await;
+            let is_in_ledger = ledger.entries.iter().any(|e| e.token_id == *tid);
+            let is_in_pending = guard.pending_orders.contains_key(tid);
+            if !is_in_ledger && !is_in_pending {
+                should_cancel = true;
+                reason = "Unknown orphan order (no target mapping). Auto-cancelling.";
+            }
+        }
+
         if !should_cancel {
             if let Some(skip_mins) = config.ignore_closing_in_mins {
                 let guard = state.read().await;
