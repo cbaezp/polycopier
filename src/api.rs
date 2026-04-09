@@ -106,6 +106,15 @@ async fn get_state(State(api_state): State<ApiState>) -> Json<StateResponse> {
     for token_id in guard.positions.keys() {
         if let Some(entry) = ledger.find_active_for_token(token_id) {
             position_sources.insert(token_id.clone(), entry.source_wallet.clone());
+        } else if let Some(entry) = ledger
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.token_id == *token_id)
+        {
+            // Fallback for positions currently in the process of closing
+            // (Limit SELL pending but still held in balance)
+            position_sources.insert(token_id.clone(), entry.source_wallet.clone());
         }
     }
 

@@ -67,9 +67,18 @@ pub fn compute_order_usd(
     sizing_mode: &SizingMode,
     copy_size_pct: Option<Decimal>,
     wallet_scalar: Decimal,
-    max_trade_usd: Decimal,
+    mut max_trade_usd: Decimal,
     target_notional: Decimal,
 ) -> Decimal {
+    // If the user's available balance is smaller than the hard max ceiling,
+    // gracefully scale down the max ceiling to their available balance
+    // minus an estimated 2% fee overhead buffer (divide by 1.02),
+    // ensuring we still enter the trade with "all we have" rather than erroring out.
+    let usable_balance = our_balance / Decimal::from_str("1.02").unwrap();
+    if usable_balance < max_trade_usd {
+        max_trade_usd = usable_balance;
+    }
+
     let desired = match sizing_mode {
         SizingMode::Fixed => max_trade_usd,
         SizingMode::SelfPct => {
@@ -581,7 +590,7 @@ pub fn start_strategy_engine(
                 let limit_price =
                     calculate_limit_price(event.price, event.side, config.max_slippage_pct);
 
-                let order = if is_closing {
+                let order: Option<(OrderRequest, Decimal)> = if is_closing {
                     // -- SELL: close our position using our 100% held size --
                     // (Polymarket handles the CTF fee by deducting from the USDC payout,
                     // we no longer reduce the share count to avoid "dust" shares).
@@ -594,12 +603,15 @@ pub fn start_strategy_engine(
                             .unwrap_or(Decimal::ZERO)
                     };
 
-                    Some(OrderRequest {
-                        token_id: event.token_id.clone(),
-                        price: limit_price,
-                        size: our_held_size.round_dp(2),
-                        side: event.side,
-                    })
+                    Some((
+                        OrderRequest {
+                            token_id: event.token_id.clone(),
+                            price: limit_price,
+                            size: our_held_size.round_dp(2),
+                            side: event.side,
+                        },
+                        Decimal::ZERO,
+                    ))
                 } else {
                     // -- BUY: size according to active SizingMode, capped and $5 floored --
                     let current_balance = {
@@ -662,18 +674,21 @@ pub fn start_strategy_engine(
                                 );
                                 None
                             } else {
-                                Some(OrderRequest {
-                                    token_id: event.token_id.clone(),
-                                    price: limit_price,
-                                    size: buy_size,
-                                    side: event.side,
-                                })
+                                Some((
+                                    OrderRequest {
+                                        token_id: event.token_id.clone(),
+                                        price: limit_price,
+                                        size: buy_size,
+                                        side: event.side,
+                                    },
+                                    total_cost,
+                                ))
                             }
                         }
                     }
                 };
 
-                if let Some(order) = order {
+                if let Some((order, cost_to_deduct)) = order {
                     // Register token as pending BEFORE spawning so any concurrent
                     // events for the same token are blocked immediately.
                     {
@@ -688,6 +703,13 @@ pub fn start_strategy_engine(
                                 event_end_date: resolved_end_date,
                             },
                         );
+
+                        // Eagerly secure the margin requirement from our balance!
+                        // This prevents rapid-fire sequential trades from overlapping
+                        // against the same stale balance and throwing CLOB 400 bounds!
+                        if cost_to_deduct > Decimal::ZERO {
+                            guard.total_balance -= cost_to_deduct;
+                        }
                     }
 
                     let submitter_clone = submitter.clone();
@@ -768,8 +790,8 @@ pub fn start_strategy_engine(
                                                 average_entry_price: order_price,
                                             },
                                         );
-                                        guard.total_balance -=
-                                            (order_size * order_price) + max_ctf_fee;
+                                        // We purposefully do NOT deduct the cost here!
+                                        // It was already eagerly deducted right before `tokio::spawn`!
                                     }
                                     // Remove from pending logic to match real world
                                     guard.pending_orders.remove(&token_id_clone);
@@ -779,6 +801,12 @@ pub fn start_strategy_engine(
                                 // Remove from pending on failure so the order can be retried.
                                 let mut guard = state_clone.write().await;
                                 guard.pending_orders.remove(&token_id_clone);
+
+                                // RESTORE the unused eagerly-deducted margin cap!
+                                if cost_to_deduct > Decimal::ZERO {
+                                    guard.total_balance += cost_to_deduct;
+                                }
+
                                 tracing::error!("Execution failed: {}", e);
                             }
                         }
