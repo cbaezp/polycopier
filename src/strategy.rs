@@ -607,7 +607,7 @@ pub fn start_strategy_engine(
                         OrderRequest {
                             token_id: event.token_id.clone(),
                             price: limit_price,
-                            size: our_held_size.round_dp(2),
+                            size: our_held_size,
                             side: event.side,
                         },
                         Decimal::ZERO,
