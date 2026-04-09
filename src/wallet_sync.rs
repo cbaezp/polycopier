@@ -379,7 +379,7 @@ pub fn start_position_close_sweep(
                         maker_address: source_wallet.clone(),
                         taker_address: source_wallet.clone(),
                         token_id: pos.token_id.clone(),
-                        price: pos.average_entry_price,
+                        price: rust_decimal::Decimal::new(1, 2), // $0.01 forces a pseudo market-order liquidation
                         size: pos.size,
                         side: TradeSide::SELL,
                         timestamp: chrono::Utc::now().timestamp(),

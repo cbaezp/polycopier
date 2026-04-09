@@ -417,7 +417,7 @@ pub fn start_strategy_engine(
                     if let Some(end_date) = ed {
                         let cutoff =
                             chrono::Utc::now() + chrono::Duration::minutes(skip_mins as i64);
-                        if end_date <= cutoff {
+                        if end_date <= cutoff && event.side == TradeSide::BUY {
                             eval.validated = false;
                             eval.reason = Some(format!(
                                 "Market closes in < {} mins (at {})",

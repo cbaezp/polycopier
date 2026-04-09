@@ -65,24 +65,28 @@ impl RiskEngine {
 
         let trade_value = trade.size * trade.price;
 
-        // === 1. Anti-spoofing: minimum $1 notional ===
-        if trade_value < Decimal::from(1) {
-            return Err("Trade value is too small (spoofing protection)".to_string());
-        }
+        // Only apply entry restrictions (spoofing, cooldowns) to BUY events.
+        // We MUST always allow closing trades to proceed, regardless of size or cooldown.
+        if trade.side == crate::models::TradeSide::BUY {
+            // === 1. Anti-spoofing: minimum $1 notional ===
+            if trade_value < Decimal::from(1) {
+                return Err("Trade value is too small (spoofing protection)".to_string());
+            }
 
-        // === 2. Consecutive-loss cooldown (Gap 12) ===
-        if let Some(until) = self.cooldown_until {
-            if Instant::now() < until {
-                let remaining = until.duration_since(Instant::now()).as_secs();
-                return Err(format!(
-                    "Risk cooldown active ({remaining}s remaining) after {} consecutive losses",
-                    self.config.max_consecutive_losses
-                ));
-            } else {
-                // Cooldown expired — reset
-                self.cooldown_until = None;
-                self.consecutive_losses = 0;
-                tracing::info!("Risk: consecutive-loss cooldown expired — resuming.");
+            // === 2. Consecutive-loss cooldown (Gap 12) ===
+            if let Some(until) = self.cooldown_until {
+                if std::time::Instant::now() < until {
+                    let remaining = until.duration_since(std::time::Instant::now()).as_secs();
+                    return Err(format!(
+                        "Risk cooldown active ({remaining}s remaining) after {} consecutive losses",
+                        self.config.max_consecutive_losses
+                    ));
+                } else {
+                    // Cooldown expired — reset
+                    self.cooldown_until = None;
+                    self.consecutive_losses = 0;
+                    tracing::info!("Risk: consecutive-loss cooldown expired — resuming.");
+                }
             }
         }
 
