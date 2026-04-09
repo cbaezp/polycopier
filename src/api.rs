@@ -95,6 +95,7 @@ pub struct StateResponse {
     pub copied_count: usize,
     pub next_scan_secs: u64,
     pub pending_orders: std::collections::HashMap<String, crate::models::QueuedOrder>,
+    pub active_orders: Vec<crate::models::ActiveApiOrder>,
     pub position_sources: HashMap<String, String>,
 }
 
@@ -103,6 +104,7 @@ async fn get_state(State(api_state): State<ApiState>) -> Json<StateResponse> {
     let ledger = api_state.copy_ledger.lock().await;
 
     let mut position_sources = HashMap::new();
+    // Map live holdings
     for token_id in guard.positions.keys() {
         if let Some(entry) = ledger.find_active_for_token(token_id) {
             position_sources.insert(token_id.clone(), entry.source_wallet.clone());
@@ -115,6 +117,19 @@ async fn get_state(State(api_state): State<ApiState>) -> Json<StateResponse> {
             // Fallback for positions currently in the process of closing
             // (Limit SELL pending but still held in balance)
             position_sources.insert(token_id.clone(), entry.source_wallet.clone());
+        }
+    }
+    // Map active API limit orders (pending opens / pending closes)
+    for o in &guard.active_orders {
+        if let Some(entry) = ledger.find_active_for_token(&o.token_id) {
+            position_sources.insert(o.token_id.clone(), entry.source_wallet.clone());
+        } else if let Some(entry) = ledger
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.token_id == o.token_id)
+        {
+            position_sources.insert(o.token_id.clone(), entry.source_wallet.clone());
         }
     }
 
@@ -131,6 +146,7 @@ async fn get_state(State(api_state): State<ApiState>) -> Json<StateResponse> {
         copied_count: guard.copied_count,
         next_scan_secs: guard.next_scan_secs,
         pending_orders: guard.pending_orders.clone(),
+        active_orders: guard.active_orders.clone(),
         position_sources,
     };
 

@@ -1,4 +1,4 @@
-use crate::models::{EvaluatedTrade, Position, QueuedOrder, TargetPosition};
+use crate::models::{ActiveApiOrder, EvaluatedTrade, Position, QueuedOrder, TargetPosition};
 use rust_decimal::Decimal;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
@@ -6,6 +6,7 @@ use std::time::Instant;
 pub struct BotState {
     pub positions: HashMap<String, Position>,
     pub live_feed: VecDeque<EvaluatedTrade>,
+    pub active_orders: Vec<ActiveApiOrder>,
     pub total_balance: Decimal,
     pub unrealized_pnl: Decimal,
     pub realized_pnl: Decimal,
@@ -48,6 +49,7 @@ impl BotState {
         Self {
             positions: HashMap::new(),
             live_feed: VecDeque::with_capacity(100),
+            active_orders: Vec::new(),
             total_balance: initial_balance,
             unrealized_pnl: Decimal::from(0),
             realized_pnl: Decimal::from(0),

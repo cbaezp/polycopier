@@ -151,3 +151,12 @@ pub struct TargetPosition {
     /// The target wallet address this position was fetched from.
     pub source_wallet: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveApiOrder {
+    pub token_id: String,
+    pub price: Decimal,
+    pub size: Decimal,
+    pub side: TradeSide,
+    pub original_size: Decimal, // how many shares were originally requested
+}

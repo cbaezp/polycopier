@@ -202,41 +202,55 @@ function App() {
           <div className="grid-cols-2">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
 
-            {/* Pending Orders */}
+            {/* Active API Limit Orders */}
             <div className="glass-panel">
               <div className="panel-header">
-                Pending Orders
-                <span className="panel-subtitle">Queued: {Object.keys(state.pending_orders || {}).length}</span>
+                Active API Limits
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <span className="live-badge" style={{ fontSize: '0.6rem', padding: '2px 4px' }}>LIVE BOOK</span>
+                  <span className="panel-subtitle">Pending: {(state.active_orders || []).length}</span>
+                </div>
               </div>
               <div className="table-container">
                 <table>
                   <thead>
                     <tr>
                       <th>Market</th>
+                      <th>Source</th>
                       <th>Size</th>
-                      <th>Our Limit</th>
-                      <th>Target Avg</th>
+                      <th>Limit Price</th>
                       <th>Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.values(state.pending_orders || {}).map((order: any, i: number) => {
+                    {(state.active_orders || []).map((order: any, i: number) => {
                       const tokenId = order.token_id;
                       const t = targets.find((x: any) => x.token_id === tokenId);
                       const title = t ? t.title : `${tokenId.substring(0, 15)}...`;
-                      const targetAvg = t ? parseFloat(t.avg_price) : 0;
+                      const sourceWallet = state.position_sources ? (state.position_sources[tokenId] || 'Unknown') : 'Unknown';
+                      const shortWallet = sourceWallet === 'Unknown' ? 'Unknown' : `${sourceWallet.substring(0, 6)}...${sourceWallet.substring(sourceWallet.length - 4)}`;
+                      
                       return (
                         <tr key={i}>
                           <td className="td-truncate" title={title}>{title}</td>
+                          <td>
+                            {sourceWallet !== 'Unknown' ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }} title={sourceWallet}>{shortWallet}</span>
+                                <CopyWalletButton wallet={sourceWallet} />
+                              </div>
+                            ) : (
+                              <span style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }} title={sourceWallet}>{shortWallet}</span>
+                            )}
+                          </td>
                           <td><span className={`side-${order.side}`}>{order.side}</span> {parseFloat(order.size).toFixed(2)}</td>
                           <td>${parseFloat(order.price).toFixed(3)}</td>
-                          <td>{targetAvg > 0 ? `$${targetAvg.toFixed(3)}` : '-'}</td>
-                          <td><span className="status status-QUEUED">QUEUED</span></td>
+                          <td><span className={`status status-${order.side === 'BUY' ? 'QUEUED' : 'HELD'}`}>PENDING {order.side}</span></td>
                         </tr>
                       );
                     })}
-                    {Object.keys(state.pending_orders || {}).length === 0 && (
-                      <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No queued orders</td></tr>
+                    {(state.active_orders || []).length === 0 && (
+                      <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No resting limit orders</td></tr>
                     )}
                   </tbody>
                 </table>

@@ -66,12 +66,33 @@ async fn run_once(
     // Prepare a set of tokens we actually care about, filtering for Live orders
     let mut open_tokens = std::collections::HashSet::new();
     let mut live_orders = Vec::new();
+    let mut mapped_active_orders = Vec::new();
+
     for o in orders_page.data {
         let status_str = format!("{:?}", o.status).to_uppercase();
         if status_str.contains("LIVE") {
             open_tokens.insert(o.asset_id.to_string());
-            live_orders.push(o);
+            live_orders.push(o.clone());
+
+            let side = if format!("{:?}", o.side).to_uppercase().contains("BUY") {
+                crate::models::TradeSide::BUY
+            } else {
+                crate::models::TradeSide::SELL
+            };
+
+            mapped_active_orders.push(crate::models::ActiveApiOrder {
+                token_id: o.asset_id.to_string(),
+                price: o.price,
+                size: o.original_size - o.size_matched,
+                original_size: o.original_size,
+                side,
+            });
         }
+    }
+
+    {
+        let mut guard = state.write().await;
+        guard.active_orders = mapped_active_orders;
     }
 
     // --- GHOST PURGE ---
