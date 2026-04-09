@@ -86,6 +86,7 @@ pub struct QueuedOrder {
     pub price: Decimal,
     pub size: Decimal,
     pub side: TradeSide,
+    pub event_end_date: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // -- Opportunity Scanner types -------------------------------------------------

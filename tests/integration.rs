@@ -40,6 +40,7 @@ fn test_config() -> polycopier::config::Config {
         max_daily_volume_usd: dec!(0),
         max_consecutive_losses: 0,
         loss_cooldown_secs: 300,
+        ignore_closing_in_mins: None,
         is_sim: false,
         sim_balance: None,
     }
@@ -141,6 +142,79 @@ mod config_tests {
         assert!(!is_placeholder(
             "0xfcbecc7e5186e88e03445b81f593685d62828f44"
         ));
+    }
+}
+
+// -- End Date Expiration tests ------------------------------------------------
+
+mod end_date_tests {
+    use super::*;
+    use polycopier::models::TradeSide;
+    use polycopier::strategy::{make_no_op_holds_query, start_strategy_engine, EndDateQuery};
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, RwLock};
+
+    #[tokio::test]
+    async fn test_ignore_closing_in_mins_skips_trade() {
+        let mut config = test_config();
+        config.ignore_closing_in_mins = Some(15);
+
+        let state = Arc::new(RwLock::new(BotState::new(false, None)));
+        let copy_ledger = Arc::new(tokio::sync::Mutex::new(
+            polycopier::copy_ledger::CopyLedger::load_from("dummy.json"),
+        ));
+
+        let (tx, rx) = mpsc::channel(10);
+        let submit_log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let submitter = Arc::new({
+            let log = submit_log.clone();
+            move |order: polycopier::models::OrderRequest| {
+                let log = log.clone();
+                let fut: std::pin::Pin<
+                    Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'static>,
+                > = Box::pin(async move {
+                    log.lock().unwrap().push(order);
+                    Ok(())
+                });
+                fut
+            }
+        });
+
+        let custom_query: EndDateQuery = Arc::new(|_| {
+            Box::pin(async {
+                // Return an end date exactly 5 minutes from now!
+                Some(chrono::Utc::now() + chrono::Duration::minutes(5))
+            })
+        });
+
+        start_strategy_engine(
+            rx,
+            state.clone(),
+            RiskEngine::new(config.clone()),
+            submitter,
+            config,
+            copy_ledger,
+            make_no_op_holds_query(),
+            custom_query,
+        );
+
+        let event = make_trade("0xabc", dec!(0.5), dec!(100), TradeSide::BUY);
+        tx.send(event).await.unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let snap = state.read().await;
+        assert_eq!(
+            snap.trades_skipped, 1,
+            "Trade should be skipped due to closing time"
+        );
+        let last_log = snap.live_feed.front().unwrap();
+        assert!(!last_log.validated);
+        assert!(last_log
+            .reason
+            .as_ref()
+            .unwrap()
+            .contains("closes in < 15 mins"));
     }
 }
 
@@ -909,7 +983,9 @@ mod strategy_engine_tests {
     use super::*;
     use polycopier::clients::OrderSubmitter;
     use polycopier::copy_ledger::CopyLedger;
-    use polycopier::strategy::{make_no_op_holds_query, start_strategy_engine};
+    use polycopier::strategy::{
+        make_no_op_end_date_query, make_no_op_holds_query, start_strategy_engine,
+    };
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
@@ -960,6 +1036,7 @@ mod strategy_engine_tests {
             config.clone(),
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         // Seed sufficient balance so the pre-check doesn't block submission
@@ -994,6 +1071,7 @@ mod strategy_engine_tests {
             config,
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         tx.send(make_trade(
@@ -1027,6 +1105,7 @@ mod strategy_engine_tests {
             config,
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         // Seed sufficient balance so the pre-check doesn't block submission
@@ -1061,6 +1140,7 @@ mod strategy_engine_tests {
             config,
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         // $0.05 * 0.01 = $0.0005 - below $1 spoofing threshold
@@ -1099,6 +1179,7 @@ mod strategy_engine_tests {
             config,
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         // SELL: 0.60 - (0.60 * 0.02) = 0.588
@@ -1140,6 +1221,7 @@ mod strategy_engine_tests {
             config.clone(),
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         // Target sells 500 shares - we hold only 20
@@ -1183,6 +1265,7 @@ mod strategy_engine_tests {
             config.clone(),
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         tx.send(make_trade("0xabc", dec!(0.60), dec!(10), TradeSide::SELL))
@@ -1214,6 +1297,7 @@ mod strategy_engine_tests {
             config.clone(),
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         tx.send(make_trade("0xabc", dec!(0.50), dec!(100), TradeSide::SELL))
@@ -1250,6 +1334,7 @@ mod strategy_engine_tests {
             config.clone(),
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         // Target sells "99999" but has no prior long position -> short entry
@@ -1295,6 +1380,7 @@ mod strategy_engine_tests {
             config.clone(),
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         tx.send(make_trade("0xabc", dec!(0.50), dec!(10), TradeSide::BUY))
@@ -1337,6 +1423,7 @@ mod strategy_engine_tests {
             config,
             test_ledger(),
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         tx.send(make_trade("0xabc", dec!(0.60), dec!(3), TradeSide::SELL))
@@ -1397,6 +1484,7 @@ mod strategy_engine_tests {
             config,
             ledger,
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         // Second target (0xabc again, or any other) tries to BUY same token
@@ -1449,6 +1537,7 @@ mod strategy_engine_tests {
             config,
             ledger,
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         // 0xabc (our copy source) sells → should trigger close
@@ -1499,6 +1588,7 @@ mod strategy_engine_tests {
             config,
             ledger,
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         // 0xdef (NOT our copy source) sells — must be ignored
@@ -1543,6 +1633,7 @@ mod strategy_engine_tests {
             config,
             ledger,
             make_no_op_holds_query(),
+            make_no_op_end_date_query(),
         );
 
         tx.send(make_trade("0xabc", dec!(0.60), dec!(10), TradeSide::SELL))

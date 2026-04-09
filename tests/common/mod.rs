@@ -33,6 +33,7 @@ pub fn test_config() -> Config {
         scan_max_entries_per_cycle: 1,
         sell_fee_buffer: dec!(0.97),
         ledger_retention_days: 90,
+        ignore_closing_in_mins: None,
         max_daily_volume_usd: dec!(0),
         max_consecutive_losses: 0,
         loss_cooldown_secs: 300,

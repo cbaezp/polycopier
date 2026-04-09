@@ -28,6 +28,7 @@ fn test_config() -> Config {
         max_daily_volume_usd: dec!(0), // disabled by default
         max_consecutive_losses: 0,     // disabled by default
         loss_cooldown_secs: 300,
+        ignore_closing_in_mins: None,
         is_sim: false,
         sim_balance: None,
     }

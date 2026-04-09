@@ -165,6 +165,13 @@ impl SettingsScreen {
                 false,
             ),
             SettingsField::new(
+                "Ignore Closing (mins)",
+                "execution.ignore_closing_in_mins",
+                "15",
+                "Skip entering/holding markets closing in <X mins. Leave blank to disable.",
+                false,
+            ),
+            SettingsField::new(
                 "Sell Fee Buffer",
                 "execution.sell_fee_buffer",
                 "0.97",
@@ -356,11 +363,21 @@ impl SettingsScreen {
 
         // Build TOML manually (same format as config.rs write_toml).
         let content = format!(
-            "# polycopier config -- safe to version control (no secrets here)\n             # Secrets (PRIVATE_KEY, FUNDER_ADDRESS) stay in .env\n             \n             [targets]\n             wallets = {wallets}\n             \n             [execution]\n             max_slippage_pct = {slippage}\n             max_trade_size_usd = {max_trade}\n             max_delay_seconds = {delay}\n             sell_fee_buffer = {fee_buf}\n             \n             [sizing]\n             mode = \"{mode}\"\n             {copy_size_line}\n             \n             [scanner]\n             max_copy_loss_pct = {loss_pct}\n             max_copy_gain_pct = {gain_pct}\n             min_entry_price = {min_price}\n             max_entry_price = {max_price}\n             max_entries_per_cycle = {max_entries}\n             \n             [risk]\n             max_daily_volume_usd = {daily_vol}\n             max_consecutive_losses = {consec_loss}\n             loss_cooldown_secs = {cooldown}\n             \n             [ledger]\n             retention_days = {retention}\n",
+            "# polycopier config -- safe to version control (no secrets here)\n             # Secrets (PRIVATE_KEY, FUNDER_ADDRESS) stay in .env\n             \n             [targets]\n             wallets = {wallets}\n             \n             [execution]\n             max_slippage_pct = {slippage}\n             max_trade_size_usd = {max_trade}\n             max_delay_seconds = {delay}\n             {ignore_closing}\n             sell_fee_buffer = {fee_buf}\n             \n             [sizing]\n             mode = \"{mode}\"\n             {copy_size_line}\n             \n             [scanner]\n             max_copy_loss_pct = {loss_pct}\n             max_copy_gain_pct = {gain_pct}\n             min_entry_price = {min_price}\n             max_entry_price = {max_price}\n             max_entries_per_cycle = {max_entries}\n             \n             [risk]\n             max_daily_volume_usd = {daily_vol}\n             max_consecutive_losses = {consec_loss}\n             loss_cooldown_secs = {cooldown}\n             \n             [ledger]\n             retention_days = {retention}\n",
             wallets = wallets_toml,
             slippage = dec("execution.max_slippage_pct", "0.02"),
             max_trade = dec("execution.max_trade_size_usd", "10.00"),
             delay = i64v("execution.max_delay_seconds", 10),
+            ignore_closing = {
+                let s = get("execution.ignore_closing_in_mins");
+                if s.trim().is_empty() {
+                    "# ignore_closing_in_mins = disabled".to_string()
+                } else if let Ok(m) = s.parse::<u64>() {
+                    format!("ignore_closing_in_mins = {}", m)
+                } else {
+                    "# invalid ignore_closing_in_mins".to_string()
+                }
+            },
             fee_buf = dec("execution.sell_fee_buffer", "0.97"),
             mode = get("sizing.mode"),
             copy_size_line = copy_size_line,

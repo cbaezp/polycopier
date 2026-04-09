@@ -21,6 +21,50 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing_subscriber::prelude::*;
 
+fn get_latest_modified_time(
+    path: &std::path::Path,
+) -> Result<std::time::SystemTime, std::io::Error> {
+    let meta = std::fs::metadata(path)?;
+    if meta.is_file() {
+        return meta.modified();
+    }
+    let mut latest = meta.modified()?;
+    if meta.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            if let Ok(mod_time) = get_latest_modified_time(&entry.path()) {
+                if mod_time > latest {
+                    latest = mod_time;
+                }
+            }
+        }
+    }
+    Ok(latest)
+}
+
+fn needs_ui_build() -> bool {
+    let dist_path = std::path::Path::new("web/dist/index.html");
+    if !dist_path.exists() {
+        return true;
+    }
+    let dist_mod = match std::fs::metadata(dist_path).and_then(|m| m.modified()) {
+        Ok(m) => m,
+        Err(_) => return true,
+    };
+
+    let mut latest_src_mod = std::time::UNIX_EPOCH;
+    for path in ["web/src", "web/package.json", "web/vite.config.ts"] {
+        let p = std::path::Path::new(path);
+        if let Ok(mod_time) = get_latest_modified_time(p) {
+            if mod_time > latest_src_mod {
+                latest_src_mod = mod_time;
+            }
+        }
+    }
+
+    latest_src_mod > dist_mod
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // ── Run mode ──────────────────────────────────────────────────────────────
@@ -81,9 +125,9 @@ async fn main() -> anyhow::Result<()> {
             "polycopier starting in DAEMON mode. Send SIGTERM or SIGINT (Ctrl-C) to stop."
         );
     } else if is_ui {
-        // Automatically build the UI if it hasn't been built yet
-        if !std::path::Path::new("web/dist").exists() {
-            tracing::info!("UI build not found. Attempting to build automatically...");
+        // Automatically build the UI if it hasn't been built yet or if src/ changed
+        if needs_ui_build() {
+            tracing::info!("UI updates detected. Attempting to build automatically...");
             let node_check = std::process::Command::new("node").arg("-v").output();
             if node_check.is_err() {
                 tracing::error!("Node.js and npm are required to build the Web UI. Please install them and try again.");
@@ -196,6 +240,7 @@ async fn main() -> anyhow::Result<()> {
         config.clone(),
         copy_ledger.clone(),
         strategy::make_live_holds_query(),
+        strategy::make_live_end_date_query(),
     );
 
     // ── Background tasks ──────────────────────────────────────────────────────
