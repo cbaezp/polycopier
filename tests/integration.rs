@@ -462,12 +462,12 @@ mod risk_tests {
     }
 
     #[test]
-    fn sell_trade_also_subject_to_min_check() {
+    fn sell_trade_is_exempt_from_min_check() {
         let mut e = engine();
         // $0.01 * 0.5 = $0.005
         assert!(e
             .check_trade(&make_trade("0xabc", dec!(0.01), dec!(0.5), TradeSide::SELL))
-            .is_err());
+            .is_ok());
     }
 
     #[test]

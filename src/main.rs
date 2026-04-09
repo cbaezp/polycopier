@@ -272,7 +272,6 @@ async fn main() -> anyhow::Result<()> {
         state.clone(),
         copy_ledger.clone(), // Gap 4: passed so sync can update fill sizes
     );
-    wallet_sync::start_price_refresh(config.target_wallets.clone(), state.clone());
 
     if !config.is_sim {
         wallet_sync::start_balance_poll(balance_fetcher, state.clone());
@@ -284,12 +283,7 @@ async fn main() -> anyhow::Result<()> {
     // Position-close sweep — backstop that emits synthetic SELLs for any
     // position we hold that no target still holds (catches missed WS SELL events).
     // Gap 2 fix: pass copy_ledger so sweep uses the correct source_wallet.
-    wallet_sync::start_position_close_sweep(
-        config.target_wallets.clone(),
-        state.clone(),
-        event_tx,
-        copy_ledger.clone(),
-    );
+    wallet_sync::start_position_close_sweep(state.clone(), event_tx, copy_ledger.clone());
 
     // Copied counter (header "Copied: N" — live API intersection every 30 s)
     copied_counter::start_copied_counter(
@@ -303,7 +297,13 @@ async fn main() -> anyhow::Result<()> {
     // Gap C + Gap E: now receives risk_engine Arc to call record_loss() on loss-triggered
     // cancellations, and uses exponential backoff on CLOB errors.
     if !config.is_sim {
-        order_watcher::start_order_watcher(config.clone(), clob, state.clone(), risk_engine);
+        order_watcher::start_order_watcher(
+            config.clone(),
+            clob,
+            state.clone(),
+            copy_ledger.clone(),
+            risk_engine,
+        );
     }
 
     // ── Local Web API Server ──────────────────────────────────────────────────

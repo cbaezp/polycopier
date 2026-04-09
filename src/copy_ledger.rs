@@ -108,7 +108,13 @@ impl CopyLedger {
             }),
             Err(_) => {
                 tracing::info!("copy_ledger not found at {path} — starting a new ledger.");
-                Self::default()
+                let l = Self {
+                    path: path.to_string(),
+                    ..Default::default()
+                };
+
+                l.save(); // Force write at startup so user knows it exists
+                return l;
             }
         };
         ledger.path = path.to_string();

@@ -28,22 +28,34 @@ fn should_cancel(
     redeemable: bool,
     expired: bool,
     max_loss: rust_decimal::Decimal,
+    is_in_ledger: bool,
+    is_in_pending: bool,
 ) -> (bool, &'static str) {
+    let mut should_cancel = false;
+    let mut reason = "";
+
     match target_pnl {
         Some(pnl) => {
             if redeemable || expired {
-                (true, "Market resolved or expired")
+                should_cancel = true;
+                reason = "Market resolved or expired";
             } else if pnl <= -max_loss {
-                (
-                    true,
-                    "Target position PnL dropped past MAX_COPY_LOSS_PCT limit",
-                )
-            } else {
-                (false, "")
+                should_cancel = true;
+                reason = "Target position PnL dropped past MAX_COPY_LOSS_PCT limit";
             }
         }
-        None => (true, "Target closed position (zero balance)"),
+        None => {
+            should_cancel = true;
+            reason = "Target closed position (zero balance)";
+        }
     }
+
+    if !should_cancel && !is_in_ledger && !is_in_pending {
+        should_cancel = true;
+        reason = "Unknown orphan order (no target mapping). Auto-cancelling.";
+    }
+
+    (should_cancel, reason)
 }
 
 mod order_watcher_logic_tests {
@@ -55,7 +67,7 @@ mod order_watcher_logic_tests {
 
     #[test]
     fn cancel_when_target_has_no_position() {
-        let (cancel, reason) = should_cancel(None, false, false, MAX_LOSS);
+        let (cancel, reason) = should_cancel(None, false, false, MAX_LOSS, true, true);
         assert!(cancel);
         assert!(reason.contains("closed position"));
     }
@@ -65,13 +77,13 @@ mod order_watcher_logic_tests {
     #[test]
     fn cancel_when_pnl_exactly_at_limit() {
         // pnl == -max_loss: the condition is <=, so this triggers
-        let (cancel, _) = should_cancel(Some(dec!(-0.10)), false, false, MAX_LOSS);
+        let (cancel, _) = should_cancel(Some(dec!(-0.10)), false, false, MAX_LOSS, true, true);
         assert!(cancel);
     }
 
     #[test]
     fn cancel_when_pnl_far_below_limit() {
-        let (cancel, reason) = should_cancel(Some(dec!(-0.80)), false, false, MAX_LOSS);
+        let (cancel, reason) = should_cancel(Some(dec!(-0.80)), false, false, MAX_LOSS, true, true);
         assert!(cancel);
         assert!(reason.contains("PnL"));
     }
@@ -79,19 +91,19 @@ mod order_watcher_logic_tests {
     #[test]
     fn no_cancel_when_pnl_just_above_limit() {
         // -9.9% — within MAX_LOSS of 10%
-        let (cancel, _) = should_cancel(Some(dec!(-0.099)), false, false, MAX_LOSS);
+        let (cancel, _) = should_cancel(Some(dec!(-0.099)), false, false, MAX_LOSS, true, true);
         assert!(!cancel);
     }
 
     #[test]
     fn no_cancel_when_pnl_positive() {
-        let (cancel, _) = should_cancel(Some(dec!(0.15)), false, false, MAX_LOSS);
+        let (cancel, _) = should_cancel(Some(dec!(0.15)), false, false, MAX_LOSS, true, true);
         assert!(!cancel);
     }
 
     #[test]
     fn no_cancel_when_pnl_zero() {
-        let (cancel, _) = should_cancel(Some(dec!(0)), false, false, MAX_LOSS);
+        let (cancel, _) = should_cancel(Some(dec!(0)), false, false, MAX_LOSS, true, true);
         assert!(!cancel);
     }
 
@@ -100,21 +112,21 @@ mod order_watcher_logic_tests {
     #[test]
     fn cancel_when_market_redeemable() {
         // Even if pnl is fine, redeemable market = resolved, cancel
-        let (cancel, reason) = should_cancel(Some(dec!(0.05)), true, false, MAX_LOSS);
+        let (cancel, reason) = should_cancel(Some(dec!(0.05)), true, false, MAX_LOSS, true, true);
         assert!(cancel);
         assert!(reason.contains("resolved or expired"));
     }
 
     #[test]
     fn cancel_when_market_past_end_date() {
-        let (cancel, reason) = should_cancel(Some(dec!(0.05)), false, true, MAX_LOSS);
+        let (cancel, reason) = should_cancel(Some(dec!(0.05)), false, true, MAX_LOSS, true, true);
         assert!(cancel);
         assert!(reason.contains("resolved or expired"));
     }
 
     #[test]
     fn cancel_when_both_redeemable_and_expired() {
-        let (cancel, _) = should_cancel(Some(dec!(0.05)), true, true, MAX_LOSS);
+        let (cancel, _) = should_cancel(Some(dec!(0.05)), true, true, MAX_LOSS, true, true);
         assert!(cancel);
     }
 
@@ -123,7 +135,7 @@ mod order_watcher_logic_tests {
     #[test]
     fn no_cancel_for_healthy_position() {
         // Target still holds it, PnL fine, market active
-        let (cancel, _) = should_cancel(Some(dec!(-0.05)), false, false, MAX_LOSS);
+        let (cancel, _) = should_cancel(Some(dec!(-0.05)), false, false, MAX_LOSS, true, true);
         assert!(!cancel);
     }
 
@@ -131,7 +143,7 @@ mod order_watcher_logic_tests {
 
     #[test]
     fn expired_beats_healthy_pnl() {
-        let (cancel, reason) = should_cancel(Some(dec!(0.50)), true, false, MAX_LOSS);
+        let (cancel, reason) = should_cancel(Some(dec!(0.50)), true, false, MAX_LOSS, true, true);
         assert!(cancel);
         assert!(reason.contains("resolved or expired"));
     }
@@ -140,8 +152,33 @@ mod order_watcher_logic_tests {
 
     #[test]
     fn zero_max_loss_cancels_on_any_negative_pnl() {
-        let (cancel, _) = should_cancel(Some(dec!(-0.001)), false, false, dec!(0));
+        let (cancel, _) = should_cancel(Some(dec!(-0.001)), false, false, dec!(0), true, true);
         assert!(cancel);
+    }
+
+    // -- Trigger D: Orphan Constraint (Unknown order) --------------------------
+
+    #[test]
+    fn cancel_when_orphan_missing_from_both_ledger_and_pending() {
+        // Position isn't expired, target has PnL, but it's an orphan!
+        let (cancel, reason) =
+            should_cancel(Some(dec!(0.10)), false, false, MAX_LOSS, false, false);
+        assert!(cancel);
+        assert!(reason.contains("Unknown orphan order"));
+    }
+
+    #[test]
+    fn no_cancel_when_in_ledger_but_not_pending() {
+        // e.g. An active limit order from a past run
+        let (cancel, _) = should_cancel(Some(dec!(0.10)), false, false, MAX_LOSS, true, false);
+        assert!(!cancel);
+    }
+
+    #[test]
+    fn no_cancel_when_in_pending_but_not_ledger() {
+        // e.g. A brand new limit order not yet flushed to ledger
+        let (cancel, _) = should_cancel(Some(dec!(0.10)), false, false, MAX_LOSS, false, true);
+        assert!(!cancel);
     }
 }
 

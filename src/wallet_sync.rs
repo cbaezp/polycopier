@@ -46,6 +46,9 @@ pub async fn seed_own_positions(funder: &str, state: State) {
         Ok(positions) => {
             let mut guard = state.write().await;
             for p in &positions {
+                if p.size <= Decimal::ZERO {
+                    continue;
+                }
                 let token_id = p.asset.to_string();
                 guard.positions.insert(
                     token_id.clone(),
@@ -66,12 +69,10 @@ pub async fn seed_own_positions(funder: &str, state: State) {
 }
 
 // ---------------------------------------------------------------------------
-// 1b. Pending CLOB order seed — AWAITABLE. Fetches live GTC orders from the
-//     CLOB and records their token IDs in state.pending_order_tokens so the
-//     scanner's first run treats them as already-queued. Prevents the
-//     "order already exists" 400 errors on bot restart.
+// 1b. Clear pending orders — startup routine ensures a clean slate
+//    by brutally cancelling all LIVE orders.
 // ---------------------------------------------------------------------------
-pub async fn seed_pending_orders(clob: &AuthedClobClient, state: State) {
+pub async fn seed_pending_orders(clob: &AuthedClobClient, _state: State) {
     let req = OrdersRequest::default();
     match clob.orders(&req, None).await {
         Ok(page) => {
@@ -82,34 +83,17 @@ pub async fn seed_pending_orders(clob: &AuthedClobClient, state: State) {
                 .collect::<Vec<_>>();
             let count = live.len();
             if count > 0 {
-                use crate::models::{QueuedOrder, TradeSide};
-                let mut guard = state.write().await;
+                tracing::warn!("Startup: Found {} active limit orders. Enforcing strict cleanup policies (cancelling all).", count);
                 for o in live {
-                    let size = o.original_size;
-                    let price = o.price;
-                    let side = if format!("{:?}", o.side).to_uppercase().contains("BUY") {
-                        TradeSide::BUY
+                    if let Err(e) = clob.cancel_order(&o.id).await {
+                        tracing::error!("Failed to cancel startup order {}: {}", o.id, e);
                     } else {
-                        TradeSide::SELL
-                    };
-                    guard.pending_orders.insert(
-                        o.asset_id.to_string(),
-                        QueuedOrder {
-                            token_id: o.asset_id.to_string(),
-                            price,
-                            size,
-                            side,
-                            event_end_date: None,
-                        },
-                    );
+                        tracing::info!("Cancelled startup order {}", o.id);
+                    }
                 }
-                tracing::warn!(
-                    "Seeded {} live GTC order(s) — scanner will treat these as already queued.",
-                    count
-                );
             }
         }
-        Err(e) => tracing::warn!("Could not seed pending CLOB orders on startup: {}", e),
+        Err(e) => tracing::warn!("Could not fetch pending CLOB orders on startup: {}", e),
     }
 }
 
@@ -146,10 +130,13 @@ pub fn start_position_sync(
                     Ok(positions) => {
                         consecutive_errors = 0;
                         let mut guard = state.write().await;
+                        guard.positions.clear();
                         for p in &positions {
-                            if p.redeemable || p.cur_price == Decimal::ZERO {
-                                // Market resolved — remove stale entry.
-                                guard.positions.remove(&p.asset.to_string());
+                            if p.redeemable
+                                || p.cur_price == Decimal::ZERO
+                                || p.size <= Decimal::ZERO
+                            {
+                                continue;
                             } else {
                                 guard.positions.insert(
                                     p.asset.to_string(),
@@ -315,23 +302,16 @@ pub fn start_balance_poll(balance_fetcher: BalanceFetcher, state: State) {
 //    exists (defensive-close path — the engine handles this gracefully).
 // ---------------------------------------------------------------------------
 pub fn start_position_close_sweep(
-    target_wallets: Vec<String>,
     state: Arc<RwLock<BotState>>,
     tx: mpsc::Sender<TradeEvent>,
     copy_ledger: Arc<Mutex<CopyLedger>>,
 ) {
-    let Some(first_target) = target_wallets.first().cloned() else {
-        tracing::warn!("Position close sweep: no target wallets configured — sweep disabled.");
-        return;
-    };
-
     tokio::spawn(async move {
         let client = DataClient::default();
-        // Wait 60 s on first run so boot-time seeding and position sync
-        // have a chance to populate state before we start comparing.
-        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-
         loop {
+            // Dynamically load target wallets from config
+            let config = crate::config::Config::reload().unwrap();
+            let target_wallets = config.target_wallets.clone();
             // Snapshot the positions we currently hold.
             let our_positions: Vec<Position> = {
                 let guard = state.read().await;
@@ -383,7 +363,12 @@ pub fn start_position_close_sweep(
                         ledger
                             .find_active_for_token(&pos.token_id)
                             .map(|e| e.source_wallet.clone())
-                            .unwrap_or_else(|| first_target.clone())
+                            .unwrap_or_else(|| {
+                                target_wallets
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| "sweep_fallback".to_string())
+                            })
                     };
 
                     let event = TradeEvent {
@@ -394,7 +379,7 @@ pub fn start_position_close_sweep(
                         maker_address: source_wallet.clone(),
                         taker_address: source_wallet.clone(),
                         token_id: pos.token_id.clone(),
-                        price: pos.average_entry_price,
+                        price: rust_decimal::Decimal::new(1, 2), // $0.01 forces a pseudo market-order liquidation
                         size: pos.size,
                         side: TradeSide::SELL,
                         timestamp: chrono::Utc::now().timestamp(),
@@ -405,7 +390,7 @@ pub fn start_position_close_sweep(
                         return;
                     }
                 }
-            }
+            } // Close if !our_positions.is_empty()
 
             tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
         }
