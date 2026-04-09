@@ -325,6 +325,7 @@ impl EndDateCache {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn start_strategy_engine(
     mut rx: mpsc::Receiver<TradeEvent>,
     state: Arc<RwLock<BotState>>,

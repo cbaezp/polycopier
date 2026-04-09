@@ -149,7 +149,7 @@ mod config_tests {
 
 mod end_date_tests {
     use super::*;
-    use polycopier::models::{QueuedOrder, TradeEvent, TradeSide};
+    use polycopier::models::TradeSide;
     use polycopier::strategy::{make_no_op_holds_query, start_strategy_engine, EndDateQuery};
     use std::sync::Arc;
     use tokio::sync::{mpsc, RwLock};
@@ -209,7 +209,7 @@ mod end_date_tests {
             "Trade should be skipped due to closing time"
         );
         let last_log = snap.live_feed.front().unwrap();
-        assert_eq!(last_log.validated, false);
+        assert!(!last_log.validated);
         assert!(last_log
             .reason
             .as_ref()
