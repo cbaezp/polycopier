@@ -46,6 +46,9 @@ pub async fn seed_own_positions(funder: &str, state: State) {
         Ok(positions) => {
             let mut guard = state.write().await;
             for p in &positions {
+                if p.size <= Decimal::ZERO {
+                    continue;
+                }
                 let token_id = p.asset.to_string();
                 guard.positions.insert(
                     token_id.clone(),
@@ -147,8 +150,11 @@ pub fn start_position_sync(
                         consecutive_errors = 0;
                         let mut guard = state.write().await;
                         for p in &positions {
-                            if p.redeemable || p.cur_price == Decimal::ZERO {
-                                // Market resolved — remove stale entry.
+                            if p.redeemable
+                                || p.cur_price == Decimal::ZERO
+                                || p.size <= Decimal::ZERO
+                            {
+                                // Market resolved or position completely liquidated — remove stale entry.
                                 guard.positions.remove(&p.asset.to_string());
                             } else {
                                 guard.positions.insert(
