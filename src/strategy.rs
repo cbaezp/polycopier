@@ -628,7 +628,7 @@ pub fn start_strategy_engine(
                     let target_notional = event.size * event.price;
                     let wallet_scalar = config
                         .target_scalars
-                        .get(&event.maker_address)
+                        .get(&event.taker_address)
                         .cloned()
                         .unwrap_or(Decimal::ONE);
                     let budget_usd = compute_order_usd(
