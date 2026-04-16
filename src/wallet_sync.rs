@@ -20,7 +20,6 @@ use crate::models::{Position, TradeEvent, TradeSide};
 use crate::state::BotState;
 use alloy::primitives::Address;
 use polymarket_client_sdk::clob::types::request::OrdersRequest;
-use polymarket_client_sdk::data::types::request::PositionsRequest;
 use polymarket_client_sdk::data::Client as DataClient;
 use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
@@ -41,8 +40,7 @@ pub async fn seed_own_positions(funder: &str, state: State) {
     let Ok(addr) = Address::from_str(funder) else {
         return;
     };
-    let req = PositionsRequest::builder().user(addr).build();
-    match client.positions(&req).await {
+    match crate::utils::fetch_all_positions(&client, addr).await {
         Ok(positions) => {
             let mut guard = state.write().await;
             for p in &positions {
@@ -125,8 +123,7 @@ pub fn start_position_sync(
         let mut consecutive_errors: u32 = 0;
         loop {
             if let Ok(addr) = Address::from_str(&funder) {
-                let req = PositionsRequest::builder().user(addr).build();
-                match client.positions(&req).await {
+                match crate::utils::fetch_all_positions(&client, addr).await {
                     Ok(positions) => {
                         consecutive_errors = 0;
                         let mut guard = state.write().await;
@@ -199,8 +196,7 @@ pub fn start_price_refresh(target_wallets: Vec<String>, state: State) {
             for wallet_str in &target_wallets {
                 let wallet_str = wallet_str.trim();
                 if let Ok(addr) = Address::from_str(wallet_str) {
-                    let req = PositionsRequest::builder().user(addr).build();
-                    match client.positions(&req).await {
+                    match crate::utils::fetch_all_positions(&client, addr).await {
                         Ok(ps) => {
                             for p in ps {
                                 price_map.insert(p.asset.to_string(), p.cur_price);
@@ -327,8 +323,7 @@ pub fn start_position_close_sweep(
                         continue;
                     }
                     if let Ok(addr) = Address::from_str(w) {
-                        let req = PositionsRequest::builder().user(addr).build();
-                        match client.positions(&req).await {
+                        match crate::utils::fetch_all_positions(&client, addr).await {
                             Ok(ps) => {
                                 for p in ps {
                                     target_tokens.insert(p.asset.to_string());

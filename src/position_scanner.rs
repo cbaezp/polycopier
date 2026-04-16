@@ -6,7 +6,6 @@ use crate::strategy::compute_order_usd;
 use alloy::primitives::Address;
 use anyhow::Result;
 use chrono::NaiveDate;
-use polymarket_client_sdk::data::types::request::PositionsRequest;
 use polymarket_client_sdk::data::Client as DataClient;
 use rust_decimal::Decimal;
 use std::collections::HashSet;
@@ -276,12 +275,11 @@ async fn scan_positions(
             }
         };
 
-        let req = PositionsRequest::builder().user(addr).build();
-        let positions = match data_client.positions(&req).await {
+        let positions = match crate::utils::fetch_all_positions(&data_client, addr).await {
             Ok(p) => p,
             Err(e) => {
                 warn!("Failed to fetch positions for {}: {}", wallet_str, e);
-                return Err(e.into()); // let the caller apply backoff
+                return Err(e); // let the caller apply backoff
             }
         };
 
