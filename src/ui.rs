@@ -348,8 +348,6 @@ impl SettingsScreen {
     /// Testable variant -- writes tunables to an arbitrary TOML path; also
     /// refreshes `.env` with secrets-only entries.
     pub fn save_to_path(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        use std::io::Write;
-
         // Build a BotConfig from the current field values
         let get = |key: &str| -> String {
             self.fields
@@ -438,14 +436,7 @@ impl SettingsScreen {
         let pk = get("env.PRIVATE_KEY");
         let fa = get("env.FUNDER_ADDRESS");
         if !pk.is_empty() {
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(".env")?;
-            writeln!(f, "# polycopier secrets -- DO NOT version control")?;
-            writeln!(f, "PRIVATE_KEY=\"{}\"", pk.trim().trim_matches('"'))?;
-            writeln!(f, "FUNDER_ADDRESS=\"{}\"", fa.trim().trim_matches('"'))?;
+            let _ = crate::config::write_secrets_env(&pk, &fa);
         }
         Ok(())
     }
