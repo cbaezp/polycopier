@@ -369,6 +369,7 @@ async fn scan_positions(
 
     let mut sized_entries: Vec<(String, TradeEvent, Decimal)> = Vec::new();
     let mut dropped_entries = Vec::new();
+    let mut cleared_entries = Vec::new();
 
     for (token_id, mut ev, percent_pnl) in to_enter {
         let pos_avg = all_positions
@@ -393,7 +394,8 @@ async fn scan_positions(
         let size = (budget_usd / ev.price).min(ev.size).round_dp(2);
         if size > Decimal::ZERO {
             ev.size = size;
-            sized_entries.push((token_id, ev, percent_pnl));
+            sized_entries.push((token_id.clone(), ev, percent_pnl));
+            cleared_entries.push(token_id);
         } else {
             let msg = if current_balance < Decimal::ONE {
                 format!("Scanner skipped: Insufficient wallet balance to meet $1.00 minimum entry (Balance: ${:.2})", current_balance)
@@ -407,10 +409,13 @@ async fn scan_positions(
         }
     }
 
-    if !dropped_entries.is_empty() {
+    if !dropped_entries.is_empty() || !cleared_entries.is_empty() {
         let mut guard = state.write().await;
         for (token_id, msg) in dropped_entries {
             guard.rejection_reasons.insert(token_id, msg);
+        }
+        for token_id in cleared_entries {
+            guard.rejection_reasons.remove(&token_id);
         }
     }
 

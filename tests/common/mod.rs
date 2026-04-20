@@ -98,6 +98,7 @@ pub fn target_pos(token_id: &str) -> TargetPosition {
         size: dec!(20),
         status: ScanStatus::Monitoring,
         source_wallet: "0xtest..wall".to_string(),
+        engine_reason: None,
     }
 }
 

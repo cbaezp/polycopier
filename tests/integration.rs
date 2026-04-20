@@ -1032,6 +1032,7 @@ mod strategy_engine_tests {
             size: dec!(10),
             status: ScanStatus::Monitoring,
             source_wallet: "0xtest..wall".to_string(),
+            engine_reason: None,
         }
     }
 
@@ -1730,6 +1731,7 @@ mod scan_interval_tests {
             size: dec!(10),
             status: ScanStatus::Monitoring,
             source_wallet: "0xtest..wall".to_string(),
+            engine_reason: None,
         }
     }
 
@@ -1976,6 +1978,7 @@ mod scanner_sort_tests {
             size: dec!(10),
             status: ScanStatus::Monitoring,
             source_wallet: "0xabc".to_string(),
+            engine_reason: None,
         }
     }
 
