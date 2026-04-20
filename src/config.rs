@@ -773,3 +773,92 @@ pub fn parse_cli_args(args: &[String]) -> CliArgs {
         sim_balance,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    #[test]
+    fn test_legacy_toml_deserializalizes_safely_with_defaults() {
+        // A minimal, legacy config.toml payload missing `sell_fee_buffer`, `max_entries_per_cycle`, etc.
+        let legacy_toml = r#"
+[targets]
+wallets = ["0xTarget1", "0xTarget2"]
+
+[execution]
+max_slippage_pct = "0.02"
+max_trade_size_usd = "50"
+
+[sizing]
+mode = "fixed"
+
+[scanner]
+max_copy_loss_pct = "0.10"
+max_copy_gain_pct = "0.05"
+min_entry_price = "0.01"
+max_entry_price = "0.99"
+
+[risk]
+max_daily_volume_usd = "1000"
+max_consecutive_losses = 3
+loss_cooldown_secs = 600
+
+[ledger]
+retention_days = 30
+        "#;
+
+        let parsed: Result<BotConfig, _> = toml::from_str(legacy_toml);
+
+        // Assert it MUST parse successfully (proving #[serde(default)] prevents cascade wipeout)
+        assert!(
+            parsed.is_ok(),
+            "Failed to parse legacy TOML despite #[serde(default)]"
+        );
+
+        let config = parsed.unwrap();
+
+        // 1. Existing values must be flawlessly preserved
+        assert_eq!(config.targets.wallets.len(), 2);
+        assert_eq!(config.execution.max_trade_size_usd, dec!(50));
+        assert_eq!(config.risk.max_consecutive_losses, 3);
+
+        // 2. Missing modern fields must be injected transparently without data destruction
+        let default_exec = ExecutionConfig::default();
+        assert_eq!(
+            config.execution.sell_fee_buffer,
+            default_exec.sell_fee_buffer
+        );
+        assert_eq!(
+            config.execution.ignore_closing_in_mins,
+            default_exec.ignore_closing_in_mins
+        );
+        assert_eq!(
+            config.execution.max_delay_seconds,
+            default_exec.max_delay_seconds
+        );
+
+        let default_scanner = ScannerConfig::default();
+        assert_eq!(
+            config.scanner.max_entries_per_cycle,
+            default_scanner.max_entries_per_cycle
+        );
+    }
+
+    #[test]
+    fn test_fatal_syntax_error_returns_err() {
+        // Garbage syntax that absolutely breaks raw TOML specs
+        let corrupt_toml = r#"
+[targets]
+wallets = "THIS IS NOT AN ARRAY AND MISSING BRACKETS
+
+[execution
+# forgot closing bracket
+        "#;
+
+        let parsed: Result<BotConfig, _> = toml::from_str(corrupt_toml);
+
+        // Ensure parsing explicitly errors out rather than silently coercing into defaults
+        assert!(parsed.is_err());
+    }
+}
