@@ -46,11 +46,13 @@ async fn handle_setup(Json(payload): Json<SetupPayload>) -> axum::response::Resp
     let _ = crate::config::write_secrets_env(&payload.private_key, &payload.funder_address);
 
     // 2. Initialize default config.toml (Target Wallets can be configured later in UI)
-    let default_cfg = BotConfig {
-        targets: TargetsConfig { wallets: vec![] },
-        ..Default::default()
-    };
-    let _ = crate::config::write_toml(&default_cfg);
+    if !std::path::Path::new("config.toml").exists() {
+        let default_cfg = BotConfig {
+            targets: TargetsConfig { wallets: vec![] },
+            ..Default::default()
+        };
+        let _ = crate::config::write_toml(&default_cfg);
+    }
 
     // Force a semantic wait to ensure file flush
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
