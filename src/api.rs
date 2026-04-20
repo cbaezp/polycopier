@@ -41,13 +41,9 @@ pub struct SetupPayload {
 
 async fn handle_setup(Json(payload): Json<SetupPayload>) -> axum::response::Response {
     use crate::config::{BotConfig, TargetsConfig};
-    use std::io::Write;
 
-    // 1. Write the genuine secrets to `.env`
-    if let Ok(mut env_file) = std::fs::File::create(".env") {
-        let _ = writeln!(env_file, "PRIVATE_KEY=\"{}\"", payload.private_key);
-        let _ = writeln!(env_file, "FUNDER_ADDRESS=\"{}\"", payload.funder_address);
-    }
+    // 1. Write the genuine secrets to `.env` (preserving any existing unrelated variables)
+    let _ = crate::config::write_secrets_env(&payload.private_key, &payload.funder_address);
 
     // 2. Initialize default config.toml (Target Wallets can be configured later in UI)
     let default_cfg = BotConfig {

@@ -350,14 +350,40 @@ retention_days = {retention}
 /// Write `.env` with secrets only (PRIVATE_KEY and FUNDER_ADDRESS).
 /// TARGET_WALLETS is now in config.toml [targets].wallets.
 pub fn write_secrets_env(private_key: &str, funder_address: &str) -> anyhow::Result<()> {
+    let existing_env = std::fs::read_to_string(".env").unwrap_or_default();
+
+    // Carefully replace existing keys instead of wiping the file
+    let mut new_lines = Vec::new();
+    let mut found_pk = false;
+    let mut found_funder = false;
+
+    for line in existing_env.lines() {
+        if line.starts_with("PRIVATE_KEY=") {
+            new_lines.push(format!("PRIVATE_KEY=\"{private_key}\""));
+            found_pk = true;
+        } else if line.starts_with("FUNDER_ADDRESS=") {
+            new_lines.push(format!("FUNDER_ADDRESS=\"{funder_address}\""));
+            found_funder = true;
+        } else {
+            new_lines.push(line.to_string());
+        }
+    }
+
+    if !found_pk {
+        new_lines.push(format!("PRIVATE_KEY=\"{private_key}\""));
+    }
+    if !found_funder {
+        new_lines.push(format!("FUNDER_ADDRESS=\"{funder_address}\""));
+    }
+
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .open(".env")?;
-    writeln!(f, "# polycopier secrets -- DO NOT version control")?;
-    writeln!(f, "PRIVATE_KEY=\"{private_key}\"")?;
-    writeln!(f, "FUNDER_ADDRESS=\"{funder_address}\"")?;
+    for line in new_lines {
+        writeln!(f, "{}", line)?;
+    }
     Ok(())
 }
 
