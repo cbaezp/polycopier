@@ -40,7 +40,15 @@ pub struct SetupPayload {
 }
 
 async fn handle_setup(Json(payload): Json<SetupPayload>) -> axum::response::Response {
-    use crate::config::{BotConfig, TargetsConfig};
+    use crate::config::{is_valid_private_key_format, BotConfig, TargetsConfig};
+
+    if !is_valid_private_key_format(&payload.private_key) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "Invalid Private Key: MUST be exactly 64 hex characters (32 bytes) long.",
+        )
+            .into_response();
+    }
 
     // 1. Write the genuine secrets to `.env` (preserving any existing unrelated variables)
     let _ = crate::config::write_secrets_env(&payload.private_key, &payload.funder_address);
@@ -186,6 +194,12 @@ async fn get_env() -> Json<EnvData> {
 }
 
 async fn post_env(Json(payload): Json<EnvData>) -> Json<serde_json::Value> {
+    if !crate::config::is_valid_private_key_format(&payload.private_key) {
+        return Json(
+            serde_json::json!({ "error": "Invalid Private Key: MUST be exactly 64 hex characters (32 bytes) long." }),
+        );
+    }
+
     if let Err(e) = crate::config::write_secrets_env(&payload.private_key, &payload.funder_address)
     {
         return Json(serde_json::json!({ "error": e.to_string() }));
