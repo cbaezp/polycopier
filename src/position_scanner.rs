@@ -37,6 +37,9 @@ pub fn classify_position(
     max_price: Decimal,
     max_copy_loss_pct: Decimal,
     max_copy_gain_pct: Decimal,
+    position_size: Decimal,
+    min_amount: Decimal,
+    max_amount: Decimal,
 ) -> ScanStatus {
     // Reject resolved markets (redeemable=true) and markets whose end date has
     // strictly passed (end_date < today).
@@ -62,6 +65,8 @@ pub fn classify_position(
         ScanStatus::Entered
     } else if cur_price < min_price || cur_price > max_price {
         ScanStatus::SkippedPrice
+    } else if (position_size * cur_price) < min_amount || (position_size * cur_price) > max_amount {
+        ScanStatus::SkippedSize
     } else if percent_pnl < -max_copy_loss_pct {
         ScanStatus::SkippedLoss
     } else if percent_pnl > max_copy_gain_pct {
@@ -89,6 +94,11 @@ pub fn start_position_scanner(
                 .chain(guard.pending_orders.keys().cloned())
                 .collect()
         };
+
+        // Allow the asynchronous balance and position syncs to finish HTTP requests
+        // before executing the first scan. This absolutely guarantees we don't scan
+        // our targets using an uninitialized $0.00 wallet balance and drop all positions.
+        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
 
         // Run immediately on startup so TUI is populated before the first sleep
         if let Err(e) = scan_positions(&config, &state, &tx, &mut already_queued).await {
@@ -305,6 +315,9 @@ async fn scan_positions(
                 max_price,
                 config.max_copy_loss_pct,
                 config.max_copy_gain_pct,
+                pos.size,
+                config.scan_min_amount,
+                config.scan_max_amount,
             );
 
             debug!(
@@ -339,52 +352,76 @@ async fn scan_positions(
                 pos.title.clone()
             };
 
+            let engine_reason = {
+                let guard = state.read().await;
+                guard.rejection_reasons.get(&token_id).cloned()
+            };
+
             all_positions.push(TargetPosition {
                 title,
                 outcome: pos.outcome.clone(),
-                token_id,
+                token_id: token_id.clone(),
                 cur_price: pos.cur_price,
                 avg_price: pos.avg_price,
                 percent_pnl: pnl_frac,
                 size: pos.size,
                 status,
                 source_wallet: wallet_str.to_string(),
+                engine_reason,
             });
         }
     }
 
-    // Pre-size the scan entries using the configured sizing mode.
-    let mut sized_entries: Vec<(String, TradeEvent, Decimal)> = to_enter
-        .into_iter()
-        .filter_map(|(token_id, mut ev, percent_pnl)| {
-            let pos_avg = all_positions
-                .iter()
-                .find(|p| p.token_id == token_id)
-                .map(|p| p.avg_price)
-                .unwrap_or(ev.price);
-            let target_notional = pos_avg * ev.size;
-            let wallet_scalar = config
-                .target_scalars
-                .get(&ev.maker_address)
-                .cloned()
-                .unwrap_or(Decimal::ONE);
-            let budget_usd = compute_order_usd(
-                current_balance,
-                &config.sizing_mode,
-                config.copy_size_pct,
-                wallet_scalar,
-                config.max_trade_size_usd,
-                target_notional,
-            );
-            let size = (budget_usd / ev.price).min(ev.size).round_dp(2);
-            if size > Decimal::ZERO {
-                ev.size = size;
-                Some((token_id, ev, percent_pnl))
+    let mut sized_entries: Vec<(String, TradeEvent, Decimal)> = Vec::new();
+    let mut dropped_entries = Vec::new();
+    let mut cleared_entries = Vec::new();
+
+    for (token_id, ev, percent_pnl) in to_enter {
+        let pos_avg = all_positions
+            .iter()
+            .find(|p| p.token_id == token_id)
+            .map(|p| p.avg_price)
+            .unwrap_or(ev.price);
+        let target_notional = pos_avg * ev.size;
+        let wallet_scalar = config
+            .target_scalars
+            .get(&ev.maker_address)
+            .cloned()
+            .unwrap_or(Decimal::ONE);
+        let budget_usd = compute_order_usd(
+            current_balance,
+            &config.sizing_mode,
+            config.copy_size_pct,
+            wallet_scalar,
+            config.max_trade_size_usd,
+            target_notional,
+        );
+        let size = (budget_usd / ev.price).min(ev.size).round_dp(2);
+        if size > Decimal::ZERO {
+            sized_entries.push((token_id.clone(), ev, percent_pnl));
+            cleared_entries.push(token_id);
+        } else {
+            let msg = if current_balance < Decimal::ONE {
+                format!("Scanner skipped: Insufficient wallet balance to meet $1.00 minimum entry (Balance: ${:.2})", current_balance)
             } else {
-                None
-            }
-        })
-        .collect();
+                format!(
+                    "Scanner skipped: Scaled budget evaluated to < $1.00 min threshold (target notional: ${:.2}, scalar: {})",
+                    target_notional, wallet_scalar
+                )
+            };
+            dropped_entries.push((token_id, msg));
+        }
+    }
+
+    if !dropped_entries.is_empty() || !cleared_entries.is_empty() {
+        let mut guard = state.write().await;
+        for (token_id, msg) in dropped_entries {
+            guard.rejection_reasons.insert(token_id, msg);
+        }
+        for token_id in cleared_entries {
+            guard.rejection_reasons.remove(&token_id);
+        }
+    }
 
     // Sort: WATCH first, then QUEUED, HELD, LOSS, RANGE; within each by pnl desc
     all_positions.sort_by(|a, b| {

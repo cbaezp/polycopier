@@ -73,6 +73,16 @@ impl RiskEngine {
                 return Err("Trade value is too small (spoofing protection)".to_string());
             }
 
+            // === 1.5. Target Size bounds ===
+            if trade_value < self.config.scan_min_amount
+                || trade_value > self.config.scan_max_amount
+            {
+                return Err(format!(
+                    "Trade USD value ({}) falls outside allowed bounds ({} - {})",
+                    trade_value, self.config.scan_min_amount, self.config.scan_max_amount
+                ));
+            }
+
             // === 2. Consecutive-loss cooldown (Gap 12) ===
             if let Some(until) = self.cooldown_until {
                 if std::time::Instant::now() < until {

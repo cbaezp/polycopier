@@ -35,7 +35,8 @@ pub use crate::models::SizingMode;
 /// All non-secret tunables + target wallet list.
 /// Written to / read from `config.toml`.
 /// Secrets (PRIVATE_KEY, FUNDER_ADDRESS) stay in `.env`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct BotConfig {
     pub targets: TargetsConfig,
     pub execution: ExecutionConfig,
@@ -46,13 +47,15 @@ pub struct BotConfig {
 }
 
 /// Copy-trade target wallets — public on-chain addresses, safe in config.toml.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct TargetsConfig {
     /// Polymarket proxy wallet addresses to copy-trade.
     pub wallets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ExecutionConfig {
     /// Slippage buffer applied to copied trade price for limit orders (0.02 = 2%).
     pub max_slippage_pct: Decimal,
@@ -67,6 +70,7 @@ pub struct ExecutionConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SizingConfig {
     /// Sizing algorithm: "self_pct" | "target_usd" | "fixed".
     pub mode: String,
@@ -75,6 +79,7 @@ pub struct SizingConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ScannerConfig {
     /// Skip catch-up if target is already this % underwater (0.40 = 40%).
     pub max_copy_loss_pct: Decimal,
@@ -86,9 +91,14 @@ pub struct ScannerConfig {
     pub max_entry_price: Decimal,
     /// Max positions queued per scan cycle (default 1 = conservative).
     pub max_entries_per_cycle: usize,
+    #[serde(default)]
+    pub min_amount: Option<Decimal>,
+    #[serde(default)]
+    pub max_amount: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RiskConfig {
     /// Max USD traded per UTC day (BUY + SELL). 0 = disabled.
     pub max_daily_volume_usd: Decimal,
@@ -99,40 +109,60 @@ pub struct RiskConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LedgerConfig {
     /// Days to keep closed ledger entries. 0 = never prune.
     pub retention_days: u32,
 }
 
-impl Default for BotConfig {
+impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
-            targets: TargetsConfig { wallets: vec![] },
-            execution: ExecutionConfig {
-                max_slippage_pct: Decimal::from_str("0.02").unwrap(),
-                max_trade_size_usd: Decimal::from_str("10.00").unwrap(),
-                max_delay_seconds: 10,
-                sell_fee_buffer: Decimal::from_str("0.97").unwrap(),
-                ignore_closing_in_mins: Some(15),
-            },
-            sizing: SizingConfig {
-                mode: "self_pct".to_string(),
-                copy_size_pct: Some(Decimal::from_str("0.15").unwrap()),
-            },
-            scanner: ScannerConfig {
-                max_copy_loss_pct: Decimal::from_str("0.40").unwrap(),
-                max_copy_gain_pct: Decimal::from_str("0.05").unwrap(),
-                min_entry_price: Decimal::from_str("0.02").unwrap(),
-                max_entry_price: Decimal::from_str("0.999").unwrap(),
-                max_entries_per_cycle: 1,
-            },
-            risk: RiskConfig {
-                max_daily_volume_usd: Decimal::ZERO,
-                max_consecutive_losses: 0,
-                loss_cooldown_secs: 300,
-            },
-            ledger: LedgerConfig { retention_days: 90 },
+            max_slippage_pct: Decimal::from_str("0.02").unwrap(),
+            max_trade_size_usd: Decimal::from_str("10.00").unwrap(),
+            max_delay_seconds: 10,
+            sell_fee_buffer: Decimal::from_str("0.97").unwrap(),
+            ignore_closing_in_mins: Some(15),
         }
+    }
+}
+
+impl Default for SizingConfig {
+    fn default() -> Self {
+        Self {
+            mode: "self_pct".to_string(),
+            copy_size_pct: Some(Decimal::from_str("0.15").unwrap()),
+        }
+    }
+}
+
+impl Default for ScannerConfig {
+    fn default() -> Self {
+        Self {
+            max_copy_loss_pct: Decimal::from_str("0.40").unwrap(),
+            max_copy_gain_pct: Decimal::from_str("0.05").unwrap(),
+            min_entry_price: Decimal::from_str("0.02").unwrap(),
+            max_entry_price: Decimal::from_str("0.999").unwrap(),
+            max_entries_per_cycle: 1,
+            min_amount: None,
+            max_amount: None,
+        }
+    }
+}
+
+impl Default for RiskConfig {
+    fn default() -> Self {
+        Self {
+            max_daily_volume_usd: Decimal::ZERO,
+            max_consecutive_losses: 0,
+            loss_cooldown_secs: 300,
+        }
+    }
+}
+
+impl Default for LedgerConfig {
+    fn default() -> Self {
+        Self { retention_days: 90 }
     }
 }
 
@@ -166,6 +196,8 @@ pub struct Config {
     pub sizing_mode: SizingMode,
     pub copy_size_pct: Option<Decimal>,
     pub scan_max_entries_per_cycle: usize,
+    pub scan_min_amount: Decimal,
+    pub scan_max_amount: Decimal,
     pub sell_fee_buffer: Decimal,
     pub ledger_retention_days: u32,
     pub max_daily_volume_usd: Decimal,
@@ -199,14 +231,15 @@ pub fn is_valid_private_key_format(val: &str) -> bool {
     hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Load `config.toml` if it exists. Returns `None` on missing or parse error.
-fn load_toml() -> Option<BotConfig> {
-    let raw = fs::read_to_string(CONFIG_TOML_PATH).ok()?;
+/// Load `config.toml` if it exists. Returns `Result` with parse error if invalid.
+fn load_toml() -> anyhow::Result<BotConfig> {
+    let raw = fs::read_to_string(CONFIG_TOML_PATH)?;
     match toml::from_str::<BotConfig>(&raw) {
-        Ok(c) => Some(c),
+        Ok(c) => Ok(c),
         Err(e) => {
-            tracing::warn!("config.toml parse error — using defaults: {e}");
-            None
+            tracing::error!("FATAL: config.toml parse error: {e}");
+            tracing::error!("Please fix the syntax error in config.toml to continue.");
+            Err(anyhow::anyhow!("config.toml parse error: {e}"))
         }
     }
 }
@@ -263,6 +296,8 @@ min_entry_price = {min_price}
 max_entry_price = {max_price}
 # Max positions queued per scan cycle (1 = conservative, raise to 2-3 for bulk)
 max_entries_per_cycle = {max_entries}
+{min_amount_line}
+{max_amount_line}
 
 [risk]
 # Max USD traded per UTC day (BUY + SELL combined). 0 = disabled.
@@ -295,6 +330,15 @@ retention_days = {retention}
         min_price = cfg.scanner.min_entry_price,
         max_price = cfg.scanner.max_entry_price,
         max_entries = cfg.scanner.max_entries_per_cycle,
+        min_amount_line = match cfg.scanner.min_amount {
+            Some(p) => format!("min_amount = {p}"),
+            None => "# min_amount = 0  # optional, filters positions with size < X".to_string(),
+        },
+        max_amount_line = match cfg.scanner.max_amount {
+            Some(p) => format!("max_amount = {p}"),
+            None =>
+                "# max_amount = 9999999999  # optional, filters positions with size > X".to_string(),
+        },
         daily_vol = cfg.risk.max_daily_volume_usd,
         consec_loss = cfg.risk.max_consecutive_losses,
         cooldown = cfg.risk.loss_cooldown_secs,
@@ -307,14 +351,44 @@ retention_days = {retention}
 /// Write `.env` with secrets only (PRIVATE_KEY and FUNDER_ADDRESS).
 /// TARGET_WALLETS is now in config.toml [targets].wallets.
 pub fn write_secrets_env(private_key: &str, funder_address: &str) -> anyhow::Result<()> {
+    if !is_valid_private_key_format(private_key) {
+        anyhow::bail!("Refusing to write structurally invalid private key to .env file");
+    }
+
+    let existing_env = std::fs::read_to_string(".env").unwrap_or_default();
+
+    // Carefully replace existing keys instead of wiping the file
+    let mut new_lines = Vec::new();
+    let mut found_pk = false;
+    let mut found_funder = false;
+
+    for line in existing_env.lines() {
+        if line.starts_with("PRIVATE_KEY=") {
+            new_lines.push(format!("PRIVATE_KEY=\"{private_key}\""));
+            found_pk = true;
+        } else if line.starts_with("FUNDER_ADDRESS=") {
+            new_lines.push(format!("FUNDER_ADDRESS=\"{funder_address}\""));
+            found_funder = true;
+        } else {
+            new_lines.push(line.to_string());
+        }
+    }
+
+    if !found_pk {
+        new_lines.push(format!("PRIVATE_KEY=\"{private_key}\""));
+    }
+    if !found_funder {
+        new_lines.push(format!("FUNDER_ADDRESS=\"{funder_address}\""));
+    }
+
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .open(".env")?;
-    writeln!(f, "# polycopier secrets -- DO NOT version control")?;
-    writeln!(f, "PRIVATE_KEY=\"{private_key}\"")?;
-    writeln!(f, "FUNDER_ADDRESS=\"{funder_address}\"")?;
+    for line in new_lines {
+        writeln!(f, "{}", line)?;
+    }
     Ok(())
 }
 
@@ -407,6 +481,14 @@ fn migrate_from_env(defaults: BotConfig) -> BotConfig {
                 "SCAN_MAX_ENTRIES_PER_CYCLE",
                 defaults.scanner.max_entries_per_cycle,
             ),
+            min_amount: env::var("MIN_AMOUNT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(defaults.scanner.min_amount),
+            max_amount: env::var("MAX_AMOUNT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(defaults.scanner.max_amount),
         },
         risk: RiskConfig {
             max_daily_volume_usd: dec("MAX_DAILY_VOLUME_USD", defaults.risk.max_daily_volume_usd),
@@ -429,7 +511,7 @@ fn migrate_from_env(defaults: BotConfig) -> BotConfig {
 impl Config {
     pub async fn load_or_prompt(is_ui: bool) -> anyhow::Result<Self> {
         // Load .env (secrets + any legacy tunable keys)
-        let _ = dotenvy::dotenv();
+        let _ = dotenvy::dotenv_override();
 
         let mut write_new_env = false;
 
@@ -483,8 +565,14 @@ impl Config {
 
         let (toml_cfg, write_new_toml) = if Path::new(CONFIG_TOML_PATH).exists() {
             // config.toml already exists — use it.
-            // But if the targets list is empty, we still need to prompt.
-            let cfg = load_toml().unwrap_or_default();
+            // If it fails to parse (e.g. syntax error), we HALT so we don't overwrite user's file.
+            let cfg = match load_toml() {
+                Ok(c) => c,
+                Err(_e) => {
+                    tracing::error!("Refusing to override config.toml due to parsing errors.");
+                    std::process::exit(1);
+                }
+            };
             (cfg, false)
         } else {
             // First run or legacy setup: migrate any .env tunable + TARGET_WALLETS keys.
@@ -626,6 +714,11 @@ impl Config {
             sizing_mode,
             copy_size_pct: cfg.sizing.copy_size_pct,
             scan_max_entries_per_cycle: cfg.scanner.max_entries_per_cycle,
+            scan_min_amount: cfg.scanner.min_amount.unwrap_or(Decimal::ZERO),
+            scan_max_amount: cfg
+                .scanner
+                .max_amount
+                .unwrap_or_else(|| Decimal::from_str("9999999999").unwrap()),
             sell_fee_buffer: cfg.execution.sell_fee_buffer,
             ledger_retention_days: cfg.ledger.retention_days,
             max_daily_volume_usd: cfg.risk.max_daily_volume_usd,
@@ -642,7 +735,7 @@ impl Config {
         let _ = dotenvy::dotenv();
         let private_key = env::var("PRIVATE_KEY").unwrap_or_default();
         let funder_address = env::var("FUNDER_ADDRESS").unwrap_or_default();
-        let cfg = load_toml().unwrap_or_default();
+        let cfg = load_toml()?;
         Ok(Self::from_parts(private_key, funder_address, cfg))
     }
 }
@@ -682,5 +775,94 @@ pub fn parse_cli_args(args: &[String]) -> CliArgs {
         headless,
         is_sim,
         sim_balance,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    #[test]
+    fn test_legacy_toml_deserializalizes_safely_with_defaults() {
+        // A minimal, legacy config.toml payload missing `sell_fee_buffer`, `max_entries_per_cycle`, etc.
+        let legacy_toml = r#"
+[targets]
+wallets = ["0xTarget1", "0xTarget2"]
+
+[execution]
+max_slippage_pct = "0.02"
+max_trade_size_usd = "50"
+
+[sizing]
+mode = "fixed"
+
+[scanner]
+max_copy_loss_pct = "0.10"
+max_copy_gain_pct = "0.05"
+min_entry_price = "0.01"
+max_entry_price = "0.99"
+
+[risk]
+max_daily_volume_usd = "1000"
+max_consecutive_losses = 3
+loss_cooldown_secs = 600
+
+[ledger]
+retention_days = 30
+        "#;
+
+        let parsed: Result<BotConfig, _> = toml::from_str(legacy_toml);
+
+        // Assert it MUST parse successfully (proving #[serde(default)] prevents cascade wipeout)
+        assert!(
+            parsed.is_ok(),
+            "Failed to parse legacy TOML despite #[serde(default)]"
+        );
+
+        let config = parsed.unwrap();
+
+        // 1. Existing values must be flawlessly preserved
+        assert_eq!(config.targets.wallets.len(), 2);
+        assert_eq!(config.execution.max_trade_size_usd, dec!(50));
+        assert_eq!(config.risk.max_consecutive_losses, 3);
+
+        // 2. Missing modern fields must be injected transparently without data destruction
+        let default_exec = ExecutionConfig::default();
+        assert_eq!(
+            config.execution.sell_fee_buffer,
+            default_exec.sell_fee_buffer
+        );
+        assert_eq!(
+            config.execution.ignore_closing_in_mins,
+            default_exec.ignore_closing_in_mins
+        );
+        assert_eq!(
+            config.execution.max_delay_seconds,
+            default_exec.max_delay_seconds
+        );
+
+        let default_scanner = ScannerConfig::default();
+        assert_eq!(
+            config.scanner.max_entries_per_cycle,
+            default_scanner.max_entries_per_cycle
+        );
+    }
+
+    #[test]
+    fn test_fatal_syntax_error_returns_err() {
+        // Garbage syntax that absolutely breaks raw TOML specs
+        let corrupt_toml = r#"
+[targets]
+wallets = "THIS IS NOT AN ARRAY AND MISSING BRACKETS
+
+[execution
+# forgot closing bracket
+        "#;
+
+        let parsed: Result<BotConfig, _> = toml::from_str(corrupt_toml);
+
+        // Ensure parsing explicitly errors out rather than silently coercing into defaults
+        assert!(parsed.is_err());
     }
 }

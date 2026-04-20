@@ -40,10 +40,10 @@ pub async fn start_ws_listener(config: &Config, tx: mpsc::Sender<TradeEvent>) ->
                     Err(_) => continue,
                 };
 
-                // Fetch the last 20 trades (was 5 - raised to survive burst activity)
+                // Fetch the last 1000 trades (was 20 - raised to survive hyper-active algorithmic targets)
                 let req = match TradesRequest::builder()
                     .user(target_addr)
-                    .limit(20)
+                    .limit(1000)
                     .map(|b| b.build())
                 {
                     Ok(r) => r,

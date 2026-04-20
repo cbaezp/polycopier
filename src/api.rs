@@ -40,21 +40,27 @@ pub struct SetupPayload {
 }
 
 async fn handle_setup(Json(payload): Json<SetupPayload>) -> axum::response::Response {
-    use crate::config::{BotConfig, TargetsConfig};
-    use std::io::Write;
+    use crate::config::{is_valid_private_key_format, BotConfig, TargetsConfig};
 
-    // 1. Write the genuine secrets to `.env`
-    if let Ok(mut env_file) = std::fs::File::create(".env") {
-        let _ = writeln!(env_file, "PRIVATE_KEY=\"{}\"", payload.private_key);
-        let _ = writeln!(env_file, "FUNDER_ADDRESS=\"{}\"", payload.funder_address);
+    if !is_valid_private_key_format(&payload.private_key) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "Invalid Private Key: MUST be exactly 64 hex characters (32 bytes) long.",
+        )
+            .into_response();
     }
 
+    // 1. Write the genuine secrets to `.env` (preserving any existing unrelated variables)
+    let _ = crate::config::write_secrets_env(&payload.private_key, &payload.funder_address);
+
     // 2. Initialize default config.toml (Target Wallets can be configured later in UI)
-    let default_cfg = BotConfig {
-        targets: TargetsConfig { wallets: vec![] },
-        ..Default::default()
-    };
-    let _ = crate::config::write_toml(&default_cfg);
+    if !std::path::Path::new("config.toml").exists() {
+        let default_cfg = BotConfig {
+            targets: TargetsConfig { wallets: vec![] },
+            ..Default::default()
+        };
+        let _ = crate::config::write_toml(&default_cfg);
+    }
 
     // Force a semantic wait to ensure file flush
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -178,7 +184,7 @@ async fn post_config(Json(payload): Json<BotConfig>) -> Json<serde_json::Value> 
 }
 
 async fn get_env() -> Json<EnvData> {
-    let _ = dotenvy::dotenv();
+    let _ = dotenvy::dotenv_override();
     let private_key = std::env::var("PRIVATE_KEY").unwrap_or_default();
     let funder_address = std::env::var("FUNDER_ADDRESS").unwrap_or_default();
     Json(EnvData {
@@ -188,6 +194,12 @@ async fn get_env() -> Json<EnvData> {
 }
 
 async fn post_env(Json(payload): Json<EnvData>) -> Json<serde_json::Value> {
+    if !crate::config::is_valid_private_key_format(&payload.private_key) {
+        return Json(
+            serde_json::json!({ "error": "Invalid Private Key: MUST be exactly 64 hex characters (32 bytes) long." }),
+        );
+    }
+
     if let Err(e) = crate::config::write_secrets_env(&payload.private_key, &payload.funder_address)
     {
         return Json(serde_json::json!({ "error": e.to_string() }));

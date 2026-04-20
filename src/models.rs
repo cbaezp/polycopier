@@ -100,6 +100,7 @@ pub enum ScanStatus {
     SkippedGain,    // Target already too far in profit -- chasing is pointless
     SkippedPrice,   // Price out of valid range
     SkippedExpired, // Market resolved or past end date
+    SkippedSize,    // Position size out of min/max bounds
 }
 
 impl ScanStatus {
@@ -112,6 +113,7 @@ impl ScanStatus {
             Self::SkippedGain => "[^] GAIN",
             Self::SkippedPrice => "[-] RANGE",
             Self::SkippedExpired => "[E] EXPRD",
+            Self::SkippedSize => "[S] SIZE",
         }
     }
     pub fn color(&self) -> Color {
@@ -123,6 +125,7 @@ impl ScanStatus {
             Self::SkippedGain => Color::Yellow,
             Self::SkippedPrice => Color::DarkGray,
             Self::SkippedExpired => Color::DarkGray,
+            Self::SkippedSize => Color::DarkGray,
         }
     }
     pub fn sort_key(&self) -> u8 {
@@ -134,6 +137,7 @@ impl ScanStatus {
             Self::SkippedGain => 4,
             Self::SkippedPrice => 5,
             Self::SkippedExpired => 6,
+            Self::SkippedSize => 7,
         }
     }
 }
@@ -150,6 +154,7 @@ pub struct TargetPosition {
     pub status: ScanStatus,
     /// The target wallet address this position was fetched from.
     pub source_wallet: String,
+    pub engine_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
