@@ -42,14 +42,20 @@ pub async fn fetch_all_positions(
             Ok(Ok(response)) => response,
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => {
-                tracing::warn!("fetch_all_positions network timeout; breaking loop early.");
-                break;
+                let msg = format!("fetch_all_positions network timeout for {}", user);
+                tracing::warn!("{}", msg);
+                return Err(anyhow::anyhow!(msg));
             }
         };
 
         if !res.status().is_success() {
-            tracing::warn!("fetch_all_positions returned HTTP {}", res.status());
-            break;
+            let msg = format!(
+                "fetch_all_positions returned HTTP {} for {}",
+                res.status(),
+                user
+            );
+            tracing::warn!("{}", msg);
+            return Err(anyhow::anyhow!(msg));
         }
 
         let mut batch: Vec<Position> = match res.json().await {

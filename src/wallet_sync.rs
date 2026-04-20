@@ -317,12 +317,16 @@ pub fn start_position_close_sweep(
             if !our_positions.is_empty() {
                 // Fetch all token IDs held by any target wallet (union).
                 let mut target_tokens: HashSet<String> = HashSet::new();
+                let mut fetch_failed = false;
+                let mut valid_targets_count = 0;
+
                 for wallet_str in &target_wallets {
                     let w = wallet_str.trim();
                     if w.is_empty() {
                         continue;
                     }
                     if let Ok(addr) = Address::from_str(w) {
+                        valid_targets_count += 1;
                         match crate::utils::fetch_all_positions(&client, addr).await {
                             Ok(ps) => {
                                 for p in ps {
@@ -330,10 +334,19 @@ pub fn start_position_close_sweep(
                                 }
                             }
                             Err(e) => {
-                                tracing::warn!("Position sweep: failed to fetch {}: {}", w, e);
+                                tracing::warn!("Position sweep: failed to fetch {}: {} - Aborting cycle to prevent unsafe liquidation", w, e);
+                                fetch_failed = true;
                             }
                         }
                     }
+                }
+
+                if fetch_failed || valid_targets_count == 0 {
+                    tracing::warn!(
+                        "Position sweep aborted due to inaccessible target API footprint."
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                    continue;
                 }
 
                 // For each position we hold, if no target still holds it → close.
