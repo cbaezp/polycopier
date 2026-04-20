@@ -351,6 +351,10 @@ retention_days = {retention}
 /// Write `.env` with secrets only (PRIVATE_KEY and FUNDER_ADDRESS).
 /// TARGET_WALLETS is now in config.toml [targets].wallets.
 pub fn write_secrets_env(private_key: &str, funder_address: &str) -> anyhow::Result<()> {
+    if !is_valid_private_key_format(private_key) {
+        anyhow::bail!("Refusing to write structurally invalid private key to .env file");
+    }
+
     let existing_env = std::fs::read_to_string(".env").unwrap_or_default();
 
     // Carefully replace existing keys instead of wiping the file
