@@ -376,7 +376,7 @@ async fn scan_positions(
     let mut dropped_entries = Vec::new();
     let mut cleared_entries = Vec::new();
 
-    for (token_id, mut ev, percent_pnl) in to_enter {
+    for (token_id, ev, percent_pnl) in to_enter {
         let pos_avg = all_positions
             .iter()
             .find(|p| p.token_id == token_id)
@@ -398,7 +398,6 @@ async fn scan_positions(
         );
         let size = (budget_usd / ev.price).min(ev.size).round_dp(2);
         if size > Decimal::ZERO {
-            ev.size = size;
             sized_entries.push((token_id.clone(), ev, percent_pnl));
             cleared_entries.push(token_id);
         } else {
