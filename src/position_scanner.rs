@@ -95,6 +95,11 @@ pub fn start_position_scanner(
                 .collect()
         };
 
+        // Allow the asynchronous balance and position syncs to finish HTTP requests
+        // before executing the first scan. This absolutely guarantees we don't scan
+        // our targets using an uninitialized $0.00 wallet balance and drop all positions.
+        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+
         // Run immediately on startup so TUI is populated before the first sleep
         if let Err(e) = scan_positions(&config, &state, &tx, &mut already_queued).await {
             warn!("Initial position scan failed: {}", e);
