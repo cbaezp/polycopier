@@ -861,7 +861,17 @@ pub fn start_strategy_engine(
                     });
                 }
             } else {
-                warn!("Skipped trade: {}", eval.reason.unwrap_or_default());
+                let reason = eval.reason.unwrap_or_default();
+                warn!("Skipped trade: {}", reason);
+                // Gap 15: If the event was originated by the scanner but failed strategy/risk validations,
+                // securely sink the rejection reason back into BotState so the dashboard UI surfaces it,
+                // instead of silently preserving "Monitoring" status infinitely.
+                if eval.original_event.transaction_hash.starts_with("scan_") {
+                    let mut guard = state.write().await;
+                    guard
+                        .rejection_reasons
+                        .insert(eval.original_event.token_id.clone(), reason);
+                }
             }
         }
     });
