@@ -112,6 +112,7 @@ The bot can also run **headless** (no TUI) as a systemd daemon on a Linux server
 - **Risk engine** — multi-layer defence applied to every trade event:
   - **Micro-trade filter** — rejects orders with < $1.00 notional (anti-spoofing)
   - **Size cap** — `MAX_TRADE_SIZE_USD` ceiling on every trade
+  - **Target Position USD Bounding** — filters out targets whose notional trade size falls outside `min_amount` and `max_amount` configured in the scanner block
   - **Daily volume limit** — `MAX_DAILY_VOLUME_USD` (0 = disabled); counts both BUY and SELL side; resets at UTC midnight
   - **Consecutive-loss circuit breaker** — `MAX_CONSECUTIVE_LOSSES` (0 = disabled); pauses trading for `LOSS_COOLDOWN_SECS` after N consecutive losses
   - **Rapid-flip guard** — 60-second cooldown per token prevents the bot from immediately re-entering a position it just exited
@@ -244,6 +245,7 @@ On first run, if `config.toml` is missing the bot auto-generates it from default
 | `max_trade_size_usd` | `10.00` | Maximum USDC to spend per copied trade (hard ceiling for all sizing modes) |
 | `max_delay_seconds` | `10` | Discard live trade events older than this many seconds (staleness filter) |
 | `sell_fee_buffer` | `0.97` | `sell_size = held × buffer` — absorbs ~3% CLOB fee. Default `0.97` |
+| `ignore_closing_in_mins` | `15` | Skip entries and cancel pending orders for markets that close within this many minutes. Omit to disable. |
 
 #### `[sizing]`
 
@@ -267,6 +269,8 @@ On first run, if `config.toml` is missing the bot auto-generates it from default
 | `max_copy_gain_pct` | `0.05` | Skip catch-up if target is already this far in profit (5% = `0.05`) |
 | `min_entry_price` | `0.02` | Minimum token price for catch-up entries (filters near-zero dust) |
 | `max_entry_price` | `0.999` | Maximum token price for catch-up entries |
+| `min_amount` | *none* | Minimum target position USD value limit. Omit to disable. Universal bounds check applied to both live parsing and scanner |
+| `max_amount` | *none* | Maximum target position USD value limit. Omit to disable. Universal bounds check applied to both live parsing and scanner |
 | `max_entries_per_cycle` | `1` | Max positions queued per scan cycle. Raise to 2–3 to enter multiple opportunities simultaneously |
 
 #### `[risk]`

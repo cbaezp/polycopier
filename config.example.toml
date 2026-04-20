@@ -22,6 +22,8 @@ max_trade_size_usd = 10.00
 max_delay_seconds = 10
 # SELL size = held_size x sell_fee_buffer (absorbs CLOB fee, default 0.97 ~ 3%)
 sell_fee_buffer = 0.97
+# Skip entries and cancel pending orders for markets that close within this many minutes.
+ignore_closing_in_mins = 15
 
 [sizing]
 # Sizing algorithm: "self_pct" | "target_usd" | "target_scalar" | "fixed"
@@ -44,6 +46,10 @@ min_entry_price = 0.02
 max_entry_price = 0.999
 # Max positions queued per scan cycle -- raise to 2-3 if you miss many entries
 max_entries_per_cycle = 1
+# Minimum target position USD value limit. Leave blank or commented to disable.
+# min_amount = 0
+# Maximum target position USD value limit. Leave blank or commented to disable.
+# max_amount = 9999999999
 
 [risk]
 # Max USD traded per UTC day (BUY + SELL combined). 0 = disabled.

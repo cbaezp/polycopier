@@ -35,7 +35,8 @@ pub use crate::models::SizingMode;
 /// All non-secret tunables + target wallet list.
 /// Written to / read from `config.toml`.
 /// Secrets (PRIVATE_KEY, FUNDER_ADDRESS) stay in `.env`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct BotConfig {
     pub targets: TargetsConfig,
     pub execution: ExecutionConfig,
@@ -46,13 +47,15 @@ pub struct BotConfig {
 }
 
 /// Copy-trade target wallets — public on-chain addresses, safe in config.toml.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct TargetsConfig {
     /// Polymarket proxy wallet addresses to copy-trade.
     pub wallets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ExecutionConfig {
     /// Slippage buffer applied to copied trade price for limit orders (0.02 = 2%).
     pub max_slippage_pct: Decimal,
@@ -67,6 +70,7 @@ pub struct ExecutionConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SizingConfig {
     /// Sizing algorithm: "self_pct" | "target_usd" | "fixed".
     pub mode: String,
@@ -75,6 +79,7 @@ pub struct SizingConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ScannerConfig {
     /// Skip catch-up if target is already this % underwater (0.40 = 40%).
     pub max_copy_loss_pct: Decimal,
@@ -86,9 +91,14 @@ pub struct ScannerConfig {
     pub max_entry_price: Decimal,
     /// Max positions queued per scan cycle (default 1 = conservative).
     pub max_entries_per_cycle: usize,
+    #[serde(default)]
+    pub min_amount: Option<Decimal>,
+    #[serde(default)]
+    pub max_amount: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RiskConfig {
     /// Max USD traded per UTC day (BUY + SELL). 0 = disabled.
     pub max_daily_volume_usd: Decimal,
@@ -99,40 +109,60 @@ pub struct RiskConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LedgerConfig {
     /// Days to keep closed ledger entries. 0 = never prune.
     pub retention_days: u32,
 }
 
-impl Default for BotConfig {
+impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
-            targets: TargetsConfig { wallets: vec![] },
-            execution: ExecutionConfig {
-                max_slippage_pct: Decimal::from_str("0.02").unwrap(),
-                max_trade_size_usd: Decimal::from_str("10.00").unwrap(),
-                max_delay_seconds: 10,
-                sell_fee_buffer: Decimal::from_str("0.97").unwrap(),
-                ignore_closing_in_mins: Some(15),
-            },
-            sizing: SizingConfig {
-                mode: "self_pct".to_string(),
-                copy_size_pct: Some(Decimal::from_str("0.15").unwrap()),
-            },
-            scanner: ScannerConfig {
-                max_copy_loss_pct: Decimal::from_str("0.40").unwrap(),
-                max_copy_gain_pct: Decimal::from_str("0.05").unwrap(),
-                min_entry_price: Decimal::from_str("0.02").unwrap(),
-                max_entry_price: Decimal::from_str("0.999").unwrap(),
-                max_entries_per_cycle: 1,
-            },
-            risk: RiskConfig {
-                max_daily_volume_usd: Decimal::ZERO,
-                max_consecutive_losses: 0,
-                loss_cooldown_secs: 300,
-            },
-            ledger: LedgerConfig { retention_days: 90 },
+            max_slippage_pct: Decimal::from_str("0.02").unwrap(),
+            max_trade_size_usd: Decimal::from_str("10.00").unwrap(),
+            max_delay_seconds: 10,
+            sell_fee_buffer: Decimal::from_str("0.97").unwrap(),
+            ignore_closing_in_mins: Some(15),
         }
+    }
+}
+
+impl Default for SizingConfig {
+    fn default() -> Self {
+        Self {
+            mode: "self_pct".to_string(),
+            copy_size_pct: Some(Decimal::from_str("0.15").unwrap()),
+        }
+    }
+}
+
+impl Default for ScannerConfig {
+    fn default() -> Self {
+        Self {
+            max_copy_loss_pct: Decimal::from_str("0.40").unwrap(),
+            max_copy_gain_pct: Decimal::from_str("0.05").unwrap(),
+            min_entry_price: Decimal::from_str("0.02").unwrap(),
+            max_entry_price: Decimal::from_str("0.999").unwrap(),
+            max_entries_per_cycle: 1,
+            min_amount: None,
+            max_amount: None,
+        }
+    }
+}
+
+impl Default for RiskConfig {
+    fn default() -> Self {
+        Self {
+            max_daily_volume_usd: Decimal::ZERO,
+            max_consecutive_losses: 0,
+            loss_cooldown_secs: 300,
+        }
+    }
+}
+
+impl Default for LedgerConfig {
+    fn default() -> Self {
+        Self { retention_days: 90 }
     }
 }
 
@@ -166,6 +196,8 @@ pub struct Config {
     pub sizing_mode: SizingMode,
     pub copy_size_pct: Option<Decimal>,
     pub scan_max_entries_per_cycle: usize,
+    pub scan_min_amount: Decimal,
+    pub scan_max_amount: Decimal,
     pub sell_fee_buffer: Decimal,
     pub ledger_retention_days: u32,
     pub max_daily_volume_usd: Decimal,
@@ -263,6 +295,8 @@ min_entry_price = {min_price}
 max_entry_price = {max_price}
 # Max positions queued per scan cycle (1 = conservative, raise to 2-3 for bulk)
 max_entries_per_cycle = {max_entries}
+{min_amount_line}
+{max_amount_line}
 
 [risk]
 # Max USD traded per UTC day (BUY + SELL combined). 0 = disabled.
@@ -295,6 +329,15 @@ retention_days = {retention}
         min_price = cfg.scanner.min_entry_price,
         max_price = cfg.scanner.max_entry_price,
         max_entries = cfg.scanner.max_entries_per_cycle,
+        min_amount_line = match cfg.scanner.min_amount {
+            Some(p) => format!("min_amount = {p}"),
+            None => "# min_amount = 0  # optional, filters positions with size < X".to_string(),
+        },
+        max_amount_line = match cfg.scanner.max_amount {
+            Some(p) => format!("max_amount = {p}"),
+            None =>
+                "# max_amount = 9999999999  # optional, filters positions with size > X".to_string(),
+        },
         daily_vol = cfg.risk.max_daily_volume_usd,
         consec_loss = cfg.risk.max_consecutive_losses,
         cooldown = cfg.risk.loss_cooldown_secs,
@@ -407,6 +450,14 @@ fn migrate_from_env(defaults: BotConfig) -> BotConfig {
                 "SCAN_MAX_ENTRIES_PER_CYCLE",
                 defaults.scanner.max_entries_per_cycle,
             ),
+            min_amount: env::var("MIN_AMOUNT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(defaults.scanner.min_amount),
+            max_amount: env::var("MAX_AMOUNT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .or(defaults.scanner.max_amount),
         },
         risk: RiskConfig {
             max_daily_volume_usd: dec("MAX_DAILY_VOLUME_USD", defaults.risk.max_daily_volume_usd),
@@ -429,7 +480,7 @@ fn migrate_from_env(defaults: BotConfig) -> BotConfig {
 impl Config {
     pub async fn load_or_prompt(is_ui: bool) -> anyhow::Result<Self> {
         // Load .env (secrets + any legacy tunable keys)
-        let _ = dotenvy::dotenv();
+        let _ = dotenvy::dotenv_override();
 
         let mut write_new_env = false;
 
@@ -626,6 +677,11 @@ impl Config {
             sizing_mode,
             copy_size_pct: cfg.sizing.copy_size_pct,
             scan_max_entries_per_cycle: cfg.scanner.max_entries_per_cycle,
+            scan_min_amount: cfg.scanner.min_amount.unwrap_or(Decimal::ZERO),
+            scan_max_amount: cfg
+                .scanner
+                .max_amount
+                .unwrap_or_else(|| Decimal::from_str("9999999999").unwrap()),
             sell_fee_buffer: cfg.execution.sell_fee_buffer,
             ledger_retention_days: cfg.ledger.retention_days,
             max_daily_volume_usd: cfg.risk.max_daily_volume_usd,

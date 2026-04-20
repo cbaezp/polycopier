@@ -14,6 +14,7 @@ pub struct BotState {
     pub target_positions: Vec<TargetPosition>,
     pub copies_executed: u32,
     pub trades_skipped: u32,
+    pub rejection_reasons: HashMap<String, String>,
 
     /// Number of positions WE currently hold that the TARGET also holds.
     /// Set by a dedicated background task that queries both wallets via the API
@@ -57,6 +58,7 @@ impl BotState {
             target_positions: Vec::new(),
             copies_executed: 0,
             trades_skipped: 0,
+            rejection_reasons: HashMap::new(),
             copied_count: 0,
             last_scan_at: None,
             next_scan_secs: 0,

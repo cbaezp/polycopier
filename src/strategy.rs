@@ -570,12 +570,18 @@ pub fn start_strategy_engine(
 
                 if let Some(reason) = skip_reason {
                     warn!("{}", reason);
+                    {
+                        let mut guard = state.write().await;
+                        guard
+                            .rejection_reasons
+                            .insert(event.token_id.clone(), reason.clone());
+                    }
                     eval.validated = false;
                     eval.reason = Some(reason);
                 }
             }
 
-            // Update TUI feed (single push, correct validated state)
+            // Update TUI feed for early validations
             {
                 let mut guard = state.write().await;
                 guard.push_evaluated_trade(eval.clone());
@@ -605,7 +611,17 @@ pub fn start_strategy_engine(
 
                     let truncated_size = our_held_size.trunc_with_scale(2);
                     if truncated_size <= rust_decimal::Decimal::ZERO {
-                        tracing::warn!("Dust fractional balance {:.4} truncates to 0.00 — skipping limit order logic and delegating to Gasless Relayer.", our_held_size);
+                        let msg = format!("Dust fractional balance {:.4} truncates to 0.00 — skipping limit order logic.", our_held_size);
+                        tracing::warn!("{}", msg);
+                        let mut guard = state.write().await;
+                        guard
+                            .rejection_reasons
+                            .insert(event.token_id.clone(), msg.clone());
+                        guard.live_feed.push_front(EvaluatedTrade {
+                            original_event: event.clone(),
+                            validated: false,
+                            reason: Some(msg),
+                        });
                         None
                     } else {
                         Some((
@@ -646,11 +662,20 @@ pub fn start_strategy_engine(
 
                     // CLOB hard minimum: 5 shares. Orders below this always 400.
                     if buy_size < MIN_ORDER_SHARES {
-                        warn!(
-                            "BUY skipped: computed {:.2} shares is below CLOB minimum of {} shares \
-                             (budget=${:.2} at price ${:.3}). Increase COPY_SIZE_PCT or wait for higher balance.",
-                            buy_size, MIN_ORDER_SHARES, budget_usd, limit_price
+                        let msg = format!(
+                            "BUY skipped: {:.2} shares < CLOB minimum of 5 shares (budget=${:.2})",
+                            buy_size, budget_usd
                         );
+                        warn!("{}", msg);
+                        let mut guard = state.write().await;
+                        guard
+                            .rejection_reasons
+                            .insert(event.token_id.clone(), msg.clone());
+                        guard.live_feed.push_front(EvaluatedTrade {
+                            original_event: event.clone(),
+                            validated: false,
+                            reason: Some(msg),
+                        });
                         None
                     } else {
                         // Pre-check balance taking the maximum CTF fee overhead into account
@@ -662,10 +687,20 @@ pub fn start_strategy_engine(
                         let total_cost = order_cost + max_ctf_fee;
 
                         if current_balance < total_cost {
-                            warn!(
-                                "Insufficient balance (have ${:.2}, need ${:.2} including fee) -- skipping entry",
+                            let msg = format!(
+                                "Insufficient USDC balance: have ${:.2}, need ${:.2}",
                                 current_balance, total_cost
                             );
+                            warn!("{}", msg);
+                            let mut guard = state.write().await;
+                            guard
+                                .rejection_reasons
+                                .insert(event.token_id.clone(), msg.clone());
+                            guard.live_feed.push_front(EvaluatedTrade {
+                                original_event: event.clone(),
+                                validated: false,
+                                reason: Some(msg),
+                            });
                             None
                         } else {
                             // Check whether we already have a pending GTC order for this token.
@@ -674,10 +709,17 @@ pub fn start_strategy_engine(
                                 guard.pending_orders.contains_key(&event.token_id)
                             };
                             if already_pending {
-                                warn!(
-                                    "BUY skipped: live GTC order already exists for token {}",
-                                    event.token_id
-                                );
+                                let msg = "BUY skipped: live GTC order already exists".to_string();
+                                warn!("{}", msg);
+                                let mut guard = state.write().await;
+                                guard
+                                    .rejection_reasons
+                                    .insert(event.token_id.clone(), msg.clone());
+                                guard.live_feed.push_front(EvaluatedTrade {
+                                    original_event: event.clone(),
+                                    validated: false,
+                                    reason: Some(msg),
+                                });
                                 None
                             } else {
                                 Some((

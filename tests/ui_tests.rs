@@ -112,10 +112,9 @@ fn screen_starts_at_first_field() {
 }
 
 #[test]
-fn screen_has_seventeen_fields() {
-    // After config split and target wallets, the screen has 16 fields covering all tunables.
+fn screen_has_twenty_one_fields() {
     let s = SettingsScreen::new();
-    assert_eq!(s.fields.len(), 17);
+    assert_eq!(s.fields.len(), 21);
 }
 
 // ── SettingsScreen change detection ──────────────────────────────────────────
@@ -267,25 +266,49 @@ fn tempfile_path() -> std::path::PathBuf {
 fn minimal_screen() -> SettingsScreen {
     let mut s = SettingsScreen::new();
     // Field order matches SettingsScreen::new():
-    // 0: targets.wallets
-    // 1: sizing.mode
-    // 2: sizing.copy_size_pct
-    // 3: execution.max_trade_size_usd
-    // 4: execution.max_slippage_pct
-    // 5: execution.max_delay_seconds
-    // 6: execution.sell_fee_buffer
-    // 7: scanner.max_copy_loss_pct
-    // 8: scanner.max_copy_gain_pct
-    // 9: scanner.min_entry_price
-    // 10: scanner.max_entry_price
-    // 11: scanner.max_entries_per_cycle
-    // 12: risk.max_daily_volume_usd
-    // 13: risk.max_consecutive_losses
-    // 14: risk.loss_cooldown_secs
-    // 15: ledger.retention_days
+    // 0: env.PRIVATE_KEY
+    // 1: env.FUNDER_ADDRESS
+    // 2: targets.wallets
+    // 3: sizing.mode
+    // 4: sizing.copy_size_pct
+    // 5: execution.max_trade_size_usd
+    // 6: execution.max_slippage_pct
+    // 7: execution.max_delay_seconds
+    // 8: execution.ignore_closing_in_mins
+    // 9: execution.sell_fee_buffer
+    // 10: scanner.max_copy_loss_pct
+    // 11: scanner.max_copy_gain_pct
+    // 12: scanner.min_entry_price
+    // 13: scanner.max_entry_price
+    // 14: scanner.max_entries_per_cycle
+    // 15: scanner.min_amount
+    // 16: scanner.max_amount
+    // 17: risk.max_daily_volume_usd
+    // 18: risk.max_consecutive_losses
+    // 19: risk.loss_cooldown_secs
+    // 20: ledger.retention_days
     let known = [
-        "0xTest", "self_pct", "0.15", "50.00", "0.02", "2", "0.97", "0.40", "0.05", "0.02",
-        "0.999", "1", "0", "0", "300", "90",
+        "0xPK",
+        "0xFA",
+        "0xTest",
+        "self_pct",
+        "0.15",
+        "50.00",
+        "0.02",
+        "2",
+        "15",
+        "0.97",
+        "0.40",
+        "0.05",
+        "0.02",
+        "0.999",
+        "1",
+        "0",
+        "9999999999",
+        "0",
+        "0",
+        "300",
+        "90",
     ];
     for (f, v) in s.fields.iter_mut().zip(known.iter()) {
         f.value = v.to_string();
@@ -298,8 +321,8 @@ fn minimal_screen() -> SettingsScreen {
 fn save_to_path_writes_toml_with_execution_section() {
     let tmp = tempfile_path();
     let mut s = minimal_screen();
-    // Change max_trade_size_usd (field 3)
-    s.fields[3].value = "50.00".into();
+    // Change max_trade_size_usd (field 5)
+    s.fields[5].value = "50.00".into();
     s.save_to_path(&tmp).expect("save failed");
 
     let content = std::fs::read_to_string(&tmp).unwrap();
@@ -319,8 +342,8 @@ fn save_to_path_writes_toml_with_execution_section() {
 fn save_to_path_writes_correct_max_entries_value() {
     let tmp = tempfile_path();
     let mut s = minimal_screen();
-    // scanner.max_entries_per_cycle (field 11) = "3"
-    s.fields[12].value = "3".into();
+    // scanner.max_entries_per_cycle (field 14) = "3"
+    s.fields[14].value = "3".into();
     s.save_to_path(&tmp).expect("save failed");
 
     let content = std::fs::read_to_string(&tmp).unwrap();
@@ -335,7 +358,7 @@ fn save_to_path_writes_correct_max_entries_value() {
 fn save_to_path_writes_risk_section() {
     let tmp = tempfile_path();
     let mut s = minimal_screen();
-    s.fields[14].value = "5".into(); // max_consecutive_losses
+    s.fields[18].value = "5".into(); // max_consecutive_losses
     s.save_to_path(&tmp).expect("save failed");
 
     let content = std::fs::read_to_string(&tmp).unwrap();

@@ -37,6 +37,9 @@ pub fn classify_position(
     max_price: Decimal,
     max_copy_loss_pct: Decimal,
     max_copy_gain_pct: Decimal,
+    position_size: Decimal,
+    min_amount: Decimal,
+    max_amount: Decimal,
 ) -> ScanStatus {
     // Reject resolved markets (redeemable=true) and markets whose end date has
     // strictly passed (end_date < today).
@@ -62,6 +65,8 @@ pub fn classify_position(
         ScanStatus::Entered
     } else if cur_price < min_price || cur_price > max_price {
         ScanStatus::SkippedPrice
+    } else if (position_size * cur_price) < min_amount || (position_size * cur_price) > max_amount {
+        ScanStatus::SkippedSize
     } else if percent_pnl < -max_copy_loss_pct {
         ScanStatus::SkippedLoss
     } else if percent_pnl > max_copy_gain_pct {
@@ -305,6 +310,9 @@ async fn scan_positions(
                 max_price,
                 config.max_copy_loss_pct,
                 config.max_copy_gain_pct,
+                pos.size,
+                config.scan_min_amount,
+                config.scan_max_amount,
             );
 
             debug!(
@@ -339,52 +347,72 @@ async fn scan_positions(
                 pos.title.clone()
             };
 
+            let engine_reason = {
+                let guard = state.read().await;
+                guard.rejection_reasons.get(&token_id).cloned()
+            };
+
             all_positions.push(TargetPosition {
                 title,
                 outcome: pos.outcome.clone(),
-                token_id,
+                token_id: token_id.clone(),
                 cur_price: pos.cur_price,
                 avg_price: pos.avg_price,
                 percent_pnl: pnl_frac,
                 size: pos.size,
                 status,
                 source_wallet: wallet_str.to_string(),
+                engine_reason,
             });
         }
     }
 
-    // Pre-size the scan entries using the configured sizing mode.
-    let mut sized_entries: Vec<(String, TradeEvent, Decimal)> = to_enter
-        .into_iter()
-        .filter_map(|(token_id, mut ev, percent_pnl)| {
-            let pos_avg = all_positions
-                .iter()
-                .find(|p| p.token_id == token_id)
-                .map(|p| p.avg_price)
-                .unwrap_or(ev.price);
-            let target_notional = pos_avg * ev.size;
-            let wallet_scalar = config
-                .target_scalars
-                .get(&ev.maker_address)
-                .cloned()
-                .unwrap_or(Decimal::ONE);
-            let budget_usd = compute_order_usd(
-                current_balance,
-                &config.sizing_mode,
-                config.copy_size_pct,
-                wallet_scalar,
-                config.max_trade_size_usd,
-                target_notional,
-            );
-            let size = (budget_usd / ev.price).min(ev.size).round_dp(2);
-            if size > Decimal::ZERO {
-                ev.size = size;
-                Some((token_id, ev, percent_pnl))
+    let mut sized_entries: Vec<(String, TradeEvent, Decimal)> = Vec::new();
+    let mut dropped_entries = Vec::new();
+
+    for (token_id, mut ev, percent_pnl) in to_enter {
+        let pos_avg = all_positions
+            .iter()
+            .find(|p| p.token_id == token_id)
+            .map(|p| p.avg_price)
+            .unwrap_or(ev.price);
+        let target_notional = pos_avg * ev.size;
+        let wallet_scalar = config
+            .target_scalars
+            .get(&ev.maker_address)
+            .cloned()
+            .unwrap_or(Decimal::ONE);
+        let budget_usd = compute_order_usd(
+            current_balance,
+            &config.sizing_mode,
+            config.copy_size_pct,
+            wallet_scalar,
+            config.max_trade_size_usd,
+            target_notional,
+        );
+        let size = (budget_usd / ev.price).min(ev.size).round_dp(2);
+        if size > Decimal::ZERO {
+            ev.size = size;
+            sized_entries.push((token_id, ev, percent_pnl));
+        } else {
+            let msg = if current_balance < Decimal::ONE {
+                format!("Scanner skipped: Insufficient wallet balance to meet $1.00 minimum entry (Balance: ${:.2})", current_balance)
             } else {
-                None
-            }
-        })
-        .collect();
+                format!(
+                    "Scanner skipped: Scaled budget evaluated to < $1.00 min threshold (target notional: ${:.2}, scalar: {})",
+                    target_notional, wallet_scalar
+                )
+            };
+            dropped_entries.push((token_id, msg));
+        }
+    }
+
+    if !dropped_entries.is_empty() {
+        let mut guard = state.write().await;
+        for (token_id, msg) in dropped_entries {
+            guard.rejection_reasons.insert(token_id, msg);
+        }
+    }
 
     // Sort: WATCH first, then QUEUED, HELD, LOSS, RANGE; within each by pnl desc
     all_positions.sort_by(|a, b| {

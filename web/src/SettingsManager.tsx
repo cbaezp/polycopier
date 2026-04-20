@@ -277,6 +277,32 @@ export default function SettingsManager() {
                 <strong>Max Filter:</strong> Ignores fully-realized winning markets (e.g. $0.99) to prevent risking capital for pennies.
               </span>
             </div>
+
+            <div className="form-group" style={{ marginTop: '1rem' }}>
+              <label>Target Position Size Filter (USD Value)</label>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>$</span>
+                <input
+                  type="number"
+                  placeholder="Min USD"
+                  style={{ width: '100px' }}
+                  value={config.scanner.min_amount || ""}
+                  onChange={(e) => setConfig({ ...config, scanner: { ...config.scanner, min_amount: e.target.value !== "" ? e.target.value : null } })}
+                />
+                <span>to</span>
+                <span style={{ color: 'var(--text-secondary)' }}>$</span>
+                <input
+                  type="number"
+                  placeholder="Max USD"
+                  style={{ width: '100px' }}
+                  value={config.scanner.max_amount || ""}
+                  onChange={(e) => setConfig({ ...config, scanner: { ...config.scanner, max_amount: e.target.value !== "" ? e.target.value : null } })}
+                />
+              </div>
+              <span className="field-hint" style={{ display: 'block', marginTop: '0.5rem' }}>
+                Universal bounds check. Polycopier will skip scanning or copying live trades if the Target's resulting position USD value falls outside this window. Leave blank to disable.
+              </span>
+            </div>
           </div>
         </div>
 

@@ -289,9 +289,16 @@ function App() {
                             {pnl > 0 ? '+' : ''}{pnl.toFixed(1)}%
                           </td>
                           <td>
-                            <span className={`status status-${statusKey.replace('Skipped', '')}`}>
-                              {statusKey}
-                            </span>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                              <span className={`status status-${statusKey.replace('Skipped', '')}`}>
+                                {statusKey}
+                              </span>
+                              {statusKey === 'Monitoring' && t.engine_reason && (
+                                <span style={{ fontSize: '0.75rem', color: 'var(--val-negative)', marginTop: '4px' }}>
+                                  Skipped: {t.engine_reason}
+                                </span>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );

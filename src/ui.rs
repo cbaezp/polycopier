@@ -76,7 +76,12 @@ impl SettingsField {
         // env_key is now a dotted TOML path like "execution.max_slippage_pct".
         // Read the current value from config.toml (via the BotConfig struct) so the
         // settings editor shows real values, not env-var defaults.
-        let value = read_toml_field(env_key).unwrap_or_else(|| default.to_string());
+        let value = if env_key.starts_with("env.") {
+            std::env::var(env_key.trim_start_matches("env."))
+                .unwrap_or_else(|_| default.to_string())
+        } else {
+            read_toml_field(env_key).unwrap_or_else(|| default.to_string())
+        };
         Self {
             label,
             env_key,
@@ -122,6 +127,20 @@ impl Default for SettingsScreen {
 impl SettingsScreen {
     pub fn new() -> Self {
         let fields = vec![
+            SettingsField::new(
+                "Private Key",
+                "env.PRIVATE_KEY",
+                "",
+                "EVM Private Key (Requires restart to take effect)",
+                true,
+            ),
+            SettingsField::new(
+                "Funder Address",
+                "env.FUNDER_ADDRESS",
+                "",
+                "Public address corresponding to your bot's wallet",
+                false,
+            ),
             SettingsField::new(
                 "Target Wallets",
                 "targets.wallets",
@@ -211,6 +230,20 @@ impl SettingsScreen {
                 "scanner.max_entries_per_cycle",
                 "1",
                 "Max positions queued per scan cycle  (1 = conservative)",
+                false,
+            ),
+            SettingsField::new(
+                "Min Entry Amount (USD)",
+                "scanner.min_amount",
+                "0",
+                "Minimum target position USD value limit",
+                false,
+            ),
+            SettingsField::new(
+                "Max Entry Amount (USD)",
+                "scanner.max_amount",
+                "9999999999",
+                "Maximum target position USD value limit",
                 false,
             ),
             SettingsField::new(
@@ -363,7 +396,7 @@ impl SettingsScreen {
 
         // Build TOML manually (same format as config.rs write_toml).
         let content = format!(
-            "# polycopier config -- safe to version control (no secrets here)\n             # Secrets (PRIVATE_KEY, FUNDER_ADDRESS) stay in .env\n             \n             [targets]\n             wallets = {wallets}\n             \n             [execution]\n             max_slippage_pct = {slippage}\n             max_trade_size_usd = {max_trade}\n             max_delay_seconds = {delay}\n             {ignore_closing}\n             sell_fee_buffer = {fee_buf}\n             \n             [sizing]\n             mode = \"{mode}\"\n             {copy_size_line}\n             \n             [scanner]\n             max_copy_loss_pct = {loss_pct}\n             max_copy_gain_pct = {gain_pct}\n             min_entry_price = {min_price}\n             max_entry_price = {max_price}\n             max_entries_per_cycle = {max_entries}\n             \n             [risk]\n             max_daily_volume_usd = {daily_vol}\n             max_consecutive_losses = {consec_loss}\n             loss_cooldown_secs = {cooldown}\n             \n             [ledger]\n             retention_days = {retention}\n",
+            "# polycopier config -- safe to version control (no secrets here)\n             # Secrets (PRIVATE_KEY, FUNDER_ADDRESS) stay in .env\n             \n             [targets]\n             wallets = {wallets}\n             \n             [execution]\n             max_slippage_pct = {slippage}\n             max_trade_size_usd = {max_trade}\n             max_delay_seconds = {delay}\n             {ignore_closing}\n             sell_fee_buffer = {fee_buf}\n             \n             [sizing]\n             mode = \"{mode}\"\n             {copy_size_line}\n             \n             [scanner]\n             max_copy_loss_pct = {loss_pct}\n             max_copy_gain_pct = {gain_pct}\n             min_entry_price = {min_price}\n             max_entry_price = {max_price}\n             max_entries_per_cycle = {max_entries}\n             {min_amount_line}\n             {max_amount_line}\n             \n             [risk]\n             max_daily_volume_usd = {daily_vol}\n             max_consecutive_losses = {consec_loss}\n             loss_cooldown_secs = {cooldown}\n             \n             [ledger]\n             retention_days = {retention}\n",
             wallets = wallets_toml,
             slippage = dec("execution.max_slippage_pct", "0.02"),
             max_trade = dec("execution.max_trade_size_usd", "10.00"),
@@ -386,6 +419,14 @@ impl SettingsScreen {
             min_price = dec("scanner.min_entry_price", "0.02"),
             max_price = dec("scanner.max_entry_price", "0.999"),
             max_entries = usizev("scanner.max_entries_per_cycle", 1),
+            min_amount_line = {
+                let s = get("scanner.min_amount");
+                if s.trim().is_empty() { "# min_amount = 0  # optional, filters positions with size < X".to_string() } else { format!("min_amount = {}", s) }
+            },
+            max_amount_line = {
+                let s = get("scanner.max_amount");
+                if s.trim().is_empty() { "# max_amount = 9999999999  # optional, filters positions with size > X".to_string() } else { format!("max_amount = {}", s) }
+            },
             daily_vol = dec("risk.max_daily_volume_usd", "0"),
             consec_loss = u32v("risk.max_consecutive_losses", 0),
             cooldown = u64v("risk.loss_cooldown_secs", 300),
@@ -394,8 +435,8 @@ impl SettingsScreen {
         std::fs::write(path, content)?;
 
         // Refresh .env with secrets only (TARGET_WALLETS is now in config.toml)
-        let pk = std::env::var("PRIVATE_KEY").unwrap_or_default();
-        let fa = std::env::var("FUNDER_ADDRESS").unwrap_or_default();
+        let pk = get("env.PRIVATE_KEY");
+        let fa = get("env.FUNDER_ADDRESS");
         if !pk.is_empty() {
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
@@ -959,9 +1000,14 @@ fn render_scanner(f: &mut Frame, snap: &Snap, area: ratatui::layout::Rect) {
         .map(|pos| {
             let pnl_pct = pos.percent_pnl * Decimal::from(100);
             let pnl_str = format!("{:+.1}%", pnl_pct);
-            let market = format!("{} ({})", pos.title, pos.outcome);
-            let market_trunc = if market.chars().count() > 44 {
-                format!("{}...", market.chars().take(44).collect::<String>())
+            let mut market = format!("{} ({})", pos.title, pos.outcome);
+            if pos.status == crate::models::ScanStatus::Monitoring {
+                if let Some(reason) = &pos.engine_reason {
+                    market = format!("{}  << {} >>", market, reason);
+                }
+            }
+            let market_trunc = if market.chars().count() > 75 {
+                format!("{}...", market.chars().take(75).collect::<String>())
             } else {
                 market.clone()
             };

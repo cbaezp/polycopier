@@ -31,6 +31,8 @@ pub fn test_config() -> Config {
         sizing_mode: SizingMode::Fixed,
         copy_size_pct: None,
         scan_max_entries_per_cycle: 1,
+        scan_min_amount: dec!(0),
+        scan_max_amount: dec!(9999999999),
         sell_fee_buffer: dec!(0.97),
         ledger_retention_days: 90,
         ignore_closing_in_mins: None,

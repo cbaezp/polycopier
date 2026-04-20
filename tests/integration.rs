@@ -35,6 +35,8 @@ fn test_config() -> polycopier::config::Config {
         sizing_mode: SizingMode::Fixed,
         copy_size_pct: None,
         scan_max_entries_per_cycle: 1,
+        scan_min_amount: dec!(0),
+        scan_max_amount: dec!(9999999999),
         sell_fee_buffer: dec!(0.97),
         ledger_retention_days: 90,
         max_daily_volume_usd: dec!(0),
@@ -634,6 +636,9 @@ mod scanner_tests {
             max(),
             loss(),
             gain(),
+            dec!(100),
+            dec!(0),
+            dec!(9999999999),
         )
     }
 
@@ -794,6 +799,9 @@ mod scanner_tests {
             max(),
             dec!(0),
             gain(),
+            dec!(100),
+            dec!(0),
+            dec!(9999999999),
         );
         assert_eq!(status, ScanStatus::SkippedLoss);
     }
@@ -841,6 +849,9 @@ mod scanner_tests {
                 max(),
                 loss(),
                 gain(),
+                dec!(100),
+                dec!(0),
+                dec!(9999999999),
             ),
             ScanStatus::SkippedExpired
         );
@@ -862,6 +873,9 @@ mod scanner_tests {
                 max(),
                 loss(),
                 gain(),
+                dec!(100),
+                dec!(0),
+                dec!(9999999999),
             ),
             ScanStatus::SkippedExpired
         );
@@ -1851,6 +1865,9 @@ mod reentry_prevention_tests {
             dec!(0.95),
             dec!(0.40),
             dec!(0.05),
+            dec!(100),
+            dec!(0),
+            dec!(9999999999),
         )
     }
 

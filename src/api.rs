@@ -178,7 +178,7 @@ async fn post_config(Json(payload): Json<BotConfig>) -> Json<serde_json::Value> 
 }
 
 async fn get_env() -> Json<EnvData> {
-    let _ = dotenvy::dotenv();
+    let _ = dotenvy::dotenv_override();
     let private_key = std::env::var("PRIVATE_KEY").unwrap_or_default();
     let funder_address = std::env::var("FUNDER_ADDRESS").unwrap_or_default();
     Json(EnvData {
