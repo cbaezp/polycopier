@@ -231,14 +231,15 @@ pub fn is_valid_private_key_format(val: &str) -> bool {
     hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Load `config.toml` if it exists. Returns `None` on missing or parse error.
-fn load_toml() -> Option<BotConfig> {
-    let raw = fs::read_to_string(CONFIG_TOML_PATH).ok()?;
+/// Load `config.toml` if it exists. Returns `Result` with parse error if invalid.
+fn load_toml() -> anyhow::Result<BotConfig> {
+    let raw = fs::read_to_string(CONFIG_TOML_PATH)?;
     match toml::from_str::<BotConfig>(&raw) {
-        Ok(c) => Some(c),
+        Ok(c) => Ok(c),
         Err(e) => {
-            tracing::warn!("config.toml parse error — using defaults: {e}");
-            None
+            tracing::error!("FATAL: config.toml parse error: {e}");
+            tracing::error!("Please fix the syntax error in config.toml to continue.");
+            Err(anyhow::anyhow!("config.toml parse error: {e}"))
         }
     }
 }
@@ -560,8 +561,14 @@ impl Config {
 
         let (toml_cfg, write_new_toml) = if Path::new(CONFIG_TOML_PATH).exists() {
             // config.toml already exists — use it.
-            // But if the targets list is empty, we still need to prompt.
-            let cfg = load_toml().unwrap_or_default();
+            // If it fails to parse (e.g. syntax error), we HALT so we don't overwrite user's file.
+            let cfg = match load_toml() {
+                Ok(c) => c,
+                Err(_e) => {
+                    tracing::error!("Refusing to override config.toml due to parsing errors.");
+                    std::process::exit(1);
+                }
+            };
             (cfg, false)
         } else {
             // First run or legacy setup: migrate any .env tunable + TARGET_WALLETS keys.
@@ -724,7 +731,7 @@ impl Config {
         let _ = dotenvy::dotenv();
         let private_key = env::var("PRIVATE_KEY").unwrap_or_default();
         let funder_address = env::var("FUNDER_ADDRESS").unwrap_or_default();
-        let cfg = load_toml().unwrap_or_default();
+        let cfg = load_toml()?;
         Ok(Self::from_parts(private_key, funder_address, cfg))
     }
 }
