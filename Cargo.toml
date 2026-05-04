@@ -27,7 +27,7 @@ thiserror     = "1.0"
 chrono        = "0.4"
 alloy         = { version = "1.8.3", features = ["signers", "network"] }
 inquire       = "0.7"
-polymarket-client-sdk = { git = "https://github.com/Polymarket/rs-clob-client.git", features = ["ws", "gamma", "data", "clob"] }
+polymarket-client-sdk = { package = "polymarket_client_sdk_v2", version = "=0.6.0-canary.1", features = ["ws", "gamma", "data", "clob"] }
 axum = "0.8.8"
 tower-http = { version = "0.6.8", features = ["cors", "fs"] }
 

@@ -318,7 +318,7 @@ retention_days = {retention}
         fee_buf = cfg.execution.sell_fee_buffer,
         ignore_closing = match cfg.execution.ignore_closing_in_mins {
             Some(m) => format!("ignore_closing_in_mins = {}", m),
-            None => "# ignore_closing_in_mins = 15".to_string(),
+            None => "ignore_closing_in_mins = 0".to_string(),
         },
         mode = cfg.sizing.mode,
         copy_size_line = match cfg.sizing.copy_size_pct {
