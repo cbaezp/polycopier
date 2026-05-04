@@ -181,11 +181,11 @@ export default function SettingsManager() {
                 <input
                   type="number"
                   style={{ width: '100px' }}
-                  value={config.execution.ignore_closing_in_mins ?? ''}
+                  value={(config.execution.ignore_closing_in_mins === 0 || config.execution.ignore_closing_in_mins === null) ? '' : config.execution.ignore_closing_in_mins}
                   placeholder="Disabled"
                   onChange={(e) => {
                     const val = e.target.value;
-                    const parsed = val ? parseInt(val) : null;
+                    const parsed = val ? parseInt(val) : 0;
                     setConfig({ ...config, execution: { ...config.execution, ignore_closing_in_mins: parsed } })
                   }}
                 />

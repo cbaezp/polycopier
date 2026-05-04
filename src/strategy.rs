@@ -410,21 +410,23 @@ pub fn start_strategy_engine(
             if eval.validated {
                 // Check market closing soon (before resolving holdings to save time if skipped)
                 if let Some(skip_mins) = config.ignore_closing_in_mins {
-                    let ed = end_date_cache
-                        .get_or_fetch(&event.token_id, &end_date_query)
-                        .await;
-                    resolved_end_date = ed;
-                    if let Some(end_date) = ed {
-                        let cutoff =
-                            chrono::Utc::now() + chrono::Duration::minutes(skip_mins as i64);
-                        if end_date <= cutoff && event.side == TradeSide::BUY {
-                            eval.validated = false;
-                            eval.reason = Some(format!(
-                                "Market closes in < {} mins (at {})",
-                                skip_mins,
-                                end_date.format("%H:%M UTC")
-                            ));
-                            warn!("Trade skipped: {}", eval.reason.as_ref().unwrap());
+                    if skip_mins > 0 {
+                        let ed = end_date_cache
+                            .get_or_fetch(&event.token_id, &end_date_query)
+                            .await;
+                        resolved_end_date = ed;
+                        if let Some(end_date) = ed {
+                            let cutoff =
+                                chrono::Utc::now() + chrono::Duration::minutes(skip_mins as i64);
+                            if end_date <= cutoff && event.side == TradeSide::BUY {
+                                eval.validated = false;
+                                eval.reason = Some(format!(
+                                    "Market closes in < {} mins (at {})",
+                                    skip_mins,
+                                    end_date.format("%H:%M UTC")
+                                ));
+                                warn!("Trade skipped: {}", eval.reason.as_ref().unwrap());
+                            }
                         }
                     }
                 }

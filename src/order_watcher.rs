@@ -222,14 +222,16 @@ async fn run_once(
 
         if !should_cancel {
             if let Some(skip_mins) = config.ignore_closing_in_mins {
-                let guard = state.read().await;
-                if let Some(pending) = guard.pending_orders.get(tid) {
-                    if let Some(ed) = pending.event_end_date {
-                        let cutoff =
-                            chrono::Utc::now() + chrono::Duration::minutes(skip_mins as i64);
-                        if ed <= cutoff {
-                            should_cancel = true;
-                            reason = "Market is closing soon (threshold reached)";
+                if skip_mins > 0 {
+                    let guard = state.read().await;
+                    if let Some(pending) = guard.pending_orders.get(tid) {
+                        if let Some(ed) = pending.event_end_date {
+                            let cutoff =
+                                chrono::Utc::now() + chrono::Duration::minutes(skip_mins as i64);
+                            if ed <= cutoff {
+                                should_cancel = true;
+                                reason = "Market is closing soon (threshold reached)";
+                            }
                         }
                     }
                 }

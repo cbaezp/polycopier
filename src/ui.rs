@@ -402,11 +402,11 @@ impl SettingsScreen {
             ignore_closing = {
                 let s = get("execution.ignore_closing_in_mins");
                 if s.trim().is_empty() {
-                    "# ignore_closing_in_mins = disabled".to_string()
+                    "ignore_closing_in_mins = 0".to_string()
                 } else if let Ok(m) = s.parse::<u64>() {
                     format!("ignore_closing_in_mins = {}", m)
                 } else {
-                    "# invalid ignore_closing_in_mins".to_string()
+                    "ignore_closing_in_mins = 0".to_string()
                 }
             },
             fee_buf = dec("execution.sell_fee_buffer", "0.97"),
